@@ -76,15 +76,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y libxml2 libncurses6 libpython3.10
 
-      # lldb-dap.exe links against Python (scripting support). Install the
-      # matching Python so its DLLs are on PATH. The LLVM 21 MSVC build
-      # uses Python 3.12; if the version changes, the verify step below
-      # will catch it (STATUS_DLL_NOT_FOUND = exit code -1073741515).
+      # lldb-dap.exe links against Python (scripting support). LLVM 21
+      # was built with Python 3.10 — must match exactly (python310.dll).
+      # This mirrors the Linux step which installs libpython3.10.
+      # If LLVM_VERSION changes, the verify step will catch a mismatch
+      # (STATUS_DLL_NOT_FOUND = exit code -1073741515 / 0xC0000135).
       - name: Install lldb-dap runtime deps (Windows)
         if: runner.os == 'Windows'
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.10"
 
       - name: Verify lldb-dap
         env:

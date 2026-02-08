@@ -16,8 +16,8 @@ import java.util.concurrent.TimeUnit
  * **Stdio mode** (default, no extra args): DAP messages flow over the process's
  * stdin/stdout via [inputStream] and [outputStream].
  *
- * **TCP mode** (pass `"-p", port.toString()`): DAP messages flow over TCP; the
- * process's stdout and stderr are available for diagnostic capture.
+ * **TCP mode** (use [startTcp]): DAP messages flow over TCP; the process's
+ * stdout and stderr are available for diagnostic capture.
  *
  * Example:
  * ```
@@ -67,12 +67,28 @@ class LldbDapProcess private constructor(
 
     companion object {
         /**
+         * Starts `lldb-dap` in TCP listen mode on [port]. Automatically detects
+         * the correct CLI syntax:
+         * - LLVM >= 19: `--connection listen://localhost:<port>`
+         * - LLVM <= 18: `-p <port>`
+         *
+         * @param lldbDapPath absolute or relative path to the `lldb-dap` executable.
+         * @param port the TCP port to listen on.
+         * @return the running [LldbDapProcess]. DAP messages flow over TCP, not
+         *   stdin/stdout; use [inputStream]/[errorStream] for diagnostic capture.
+         */
+        fun startTcp(lldbDapPath: File, port: Int): LldbDapProcess {
+            val args = tcpListenArgs(lldbDapPath, port)
+            return start(lldbDapPath, *args.toTypedArray())
+        }
+
+        /**
          * Starts `lldb-dap` as a subprocess. The environment is automatically
          * configured based on the directory layout next to [lldbDapPath]
          * (library paths for `liblldb`, Python site-packages on Linux, etc.).
          *
-         * Pass additional arguments in [args] — for example `"-p", "1234"`
-         * to start in TCP mode.
+         * For stdio mode, pass no extra [args]. For TCP mode, prefer [startTcp]
+         * which handles CLI version differences automatically.
          *
          * @param lldbDapPath absolute or relative path to the `lldb-dap` executable.
          * @param args additional command-line arguments (empty for stdio mode).
@@ -143,6 +159,25 @@ class LldbDapProcess private constructor(
                 else -> arch
             }
             return "$osPart-$archPart"
+        }
+
+        /**
+         * Returns the command-line arguments for starting lldb-dap in TCP listen
+         * mode. Detects the CLI flavor by inspecting `--help` output:
+         * - LLVM >= 19 uses `--connection listen://localhost:<port>`
+         * - LLVM <= 18 uses `-p <port>`
+         */
+        private fun tcpListenArgs(lldbDapPath: File, port: Int): List<String> {
+            val helpProcess = ProcessBuilder(lldbDapPath.absolutePath, "--help")
+                .redirectErrorStream(true)
+                .start()
+            val helpOutput = helpProcess.inputStream.bufferedReader().readText()
+            helpProcess.waitFor(5, TimeUnit.SECONDS)
+            return if ("--connection" in helpOutput) {
+                listOf("--connection", "listen://localhost:$port")
+            } else {
+                listOf("-p", port.toString())
+            }
         }
 
         /**

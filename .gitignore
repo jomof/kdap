@@ -53,3 +53,4 @@ codelldb-vsix/
 .lldb-download/
 lldb-build/
 lldb-install/
+prebuilts/

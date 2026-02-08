@@ -59,7 +59,7 @@ object LldbDapHarness {
             ?: throw IllegalStateException(
                 "lldb-dap not found (run scripts/download-lldb.sh or set KDAP_LLDB_ROOT)"
             )
-        val lldbDap = LldbDapProcess.start(path, "-p", port.toString())
+        val lldbDap = LldbDapProcess.startTcp(path, port)
         return lldbDap to port
     }
 }

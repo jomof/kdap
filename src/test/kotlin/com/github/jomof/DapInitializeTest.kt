@@ -20,41 +20,39 @@ class DapInitializeTest {
         {}
     """.trimIndent()
 
-    /** Current capabilities from lldb-dap (LLVM 18.1.8 prebuilts). */
+    /** Current capabilities from lldb-dap (LLVM 21.1.8 prebuilts). */
     private val expectedLldbDapInitializeCapabilitiesBaseline = """
         {
           "supportTerminateDebuggee": true,
+          "supportsCancelRequest": true,
+          "supportsBreakpointLocationsRequest": true,
           "supportsCompletionsRequest": true,
-          "supportsConfigurationDoneRequest": true,
           "supportsConditionalBreakpoints": true,
+          "supportsConfigurationDoneRequest": true,
+          "supportsDataBreakpoints": true,
           "supportsDelayedStackTraceLoading": true,
           "supportsDisassembleRequest": true,
           "supportsEvaluateForHovers": true,
+          "supportsExceptionFilterOptions": true,
           "supportsExceptionInfoRequest": true,
-          "supportsExceptionOptions": true,
           "supportsFunctionBreakpoints": true,
-          "supportsGotoTargetsRequest": false,
           "supportsHitConditionalBreakpoints": true,
-          "supportsLoadedSourcesRequest": false,
+          "supportsInstructionBreakpoints": true,
           "supportsLogPoints": true,
           "supportsModulesRequest": true,
-          "supportsProgressReporting": true,
-          "supportsRestartFrame": false,
-          "supportsRestartRequest": true,
-          "supportsRunInTerminalRequest": true,
+          "supportsReadMemoryRequest": true,
           "supportsSetVariable": true,
-          "supportsStepBack": false,
-          "supportsStepInTargetsRequest": false,
+          "supportsSteppingGranularity": true,
           "supportsValueFormattingOptions": true,
+          "supportsWriteMemoryRequest": true,
           "completionTriggerCharacters": [".", " ", "\t"],
           "exceptionBreakpointFilters": [
-            { "filter": "cpp_catch",   "default": false, "label": "C++ Catch" },
-            { "filter": "cpp_throw",   "default": false, "label": "C++ Throw" },
-            { "filter": "objc_catch",  "default": false, "label": "Objective-C Catch" },
-            { "filter": "objc_throw",  "default": false, "label": "Objective-C Throw" },
-            { "filter": "swift_catch", "default": false, "label": "Swift Catch" },
-            { "filter": "swift_throw", "default": false, "label": "Swift Throw" }
-          ]
+            { "filter": "cpp_catch",  "supportsCondition": true, "description": "C++ Catch",            "label": "C++ Catch" },
+            { "filter": "cpp_throw",  "supportsCondition": true, "description": "C++ Throw",            "label": "C++ Throw" },
+            { "filter": "objc_catch", "supportsCondition": true, "description": "Objective-C Catch",    "label": "Objective-C Catch" },
+            { "filter": "objc_throw", "supportsCondition": true, "description": "Objective-C Throw",    "label": "Objective-C Throw" }
+          ],
+          "${'$'}__lldb_version": "lldb version 21.1.8 (https://github.com/llvm/llvm-project revision 2078da43e25a4623cab2d0d60decddf709aaea28)\n  clang revision 2078da43e25a4623cab2d0d60decddf709aaea28\n  llvm revision 2078da43e25a4623cab2d0d60decddf709aaea28"
         }
     """.trimIndent()
 

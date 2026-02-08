@@ -41,6 +41,7 @@ jobs:
           path: lldb-build
           key: lldb-${{ matrix.os }}-${{ matrix.platform_id }}-${{ env.LLVM_TAG }}
 
+      # One of the two steps below runs per job; the other is skipped (see if: conditions).
       - name: Build LLDB (Unix)
         if: matrix.os != 'windows-latest'
         env:

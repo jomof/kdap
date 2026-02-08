@@ -55,7 +55,7 @@ We **build LLDB (and thus lldb-dap and lldb-server) from source** using the offi
 
 ### 1.4 CI (GitHub Actions) (implemented)
 
-- **Workflow**: `.github/workflows/build-lldb.yml` runs on push/PR to `main` and on workflow_dispatch. It invokes the same build as local: **`scripts/build-lldb.sh`** on Linux and macOS, **`scripts/build-lldb.ps1`** on Windows. No prebuilt downloads; the only source of binaries is our build.
+- **Workflow**: `.github/workflows/ci.yml` runs on push/PR to `main` and on workflow_dispatch. It invokes the same build as local: **`scripts/build-lldb.sh`** on Linux and macOS, **`scripts/build-lldb.ps1`** on Windows. No prebuilt downloads; the only source of binaries is our build.
 - **Caching**: The workflow caches the **build tree** (`lldb-build/`) with key `lldb-${{ matrix.os }}-${{ matrix.platform_id }}-${{ env.LLVM_TAG }}`. Restore at the start of the job; if missing, the script runs the full build and the cache is saved. This keeps CI fast after the first run per platform/version.
 - **Matrix**: `ubuntu-latest` (linux-x64), `macos-latest` (darwin-arm64), `windows-latest` (win32-x64). Each job sets `PLATFORM_ID` to the matrix value; the script writes into `prebuilts/lldb/<platform_id>/`. A “Verify prebuilts layout” step checks that `lldb-dap` and `lldb-server` are present there.
 - **Reproducibility**: The workflow sets `LLVM_TAG=llvmorg-18.1.8` (same default as the scripts). Change the tag in the workflow and in the scripts when upgrading; document in README/DEV.md.
@@ -70,7 +70,7 @@ We **build LLDB (and thus lldb-dap and lldb-server) from source** using the offi
 | Build debris (gitignored) | `lldb-build/` (clone + build tree + install-staging) |
 | Runtime deps | lldb-dap’s own deps (e.g. liblldb); we only spawn the process |
 | Remote | lldb-server from the same source build (same repo, same tag) |
-| CI | `.github/workflows/build-lldb.yml` runs the script per matrix job; caches `lldb-build/` by OS, platform_id, and LLVM_TAG |
+| CI | `.github/workflows/ci.yml` runs the script per matrix job; caches `lldb-build/` by OS, platform_id, and LLVM_TAG |
 | Versioning | Pinned tag `llvmorg-18.1.8` in scripts and workflow; update in both when upgrading |
 
 ---

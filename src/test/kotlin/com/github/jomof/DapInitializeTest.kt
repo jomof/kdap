@@ -6,7 +6,7 @@ import org.junit.jupiter.params.provider.MethodSource
 
 /**
  * Tests that the DAP server responds to `initialize`. Runs for each connection mode
- * (our server: stdio, TCP listen, TCP connect, in-process; lldb-dap: TCP_LLDB).
+ * (our server: stdio, TCP listen, TCP connect, in-process; lldb-dap: TCP_LLDB; CodeLLDB: STDIO_CODELDB, TCP_CODELDB).
  */
 class DapInitializeTest {
 

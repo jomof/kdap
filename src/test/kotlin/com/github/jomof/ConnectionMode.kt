@@ -48,7 +48,9 @@ enum class ServerKind {
     /** Our KDAP server (MainKt). */
     OUR_SERVER,
     /** lldb-dap from LLVM prebuilts. */
-    LLDB_DAP
+    LLDB_DAP,
+    /** CodeLLDB adapter (from codelldb-vsix or KDAP_CODELDB_EXTENSION). */
+    CODELDB
 }
 
 /**
@@ -165,14 +167,48 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                 )
             }
         }
+    },
+    /** Connects to CodeLLDB adapter via stdio (adapter with no args). */
+    STDIO_CODELDB(ServerKind.CODELDB) {
+        override fun connect(): ConnectionContext {
+            if (!CodeLldbHarness.isAvailable())
+                throw IllegalStateException("CodeLLDB adapter not available (run scripts/download-codelldb-vsix.sh or set KDAP_CODELDB_EXTENSION)")
+            val process = CodeLldbHarness.startAdapter()
+            return object : ConnectionContext {
+                override val inputStream: InputStream = process.inputStream
+                override val outputStream: OutputStream = process.outputStream
+                override fun close() = CodeLldbHarness.stopProcess(process)
+            }
+        }
+    },
+    /** Connects to CodeLLDB adapter via TCP (adapter --port N). */
+    TCP_CODELDB(ServerKind.CODELDB) {
+        override fun connect(): ConnectionContext {
+            if (!CodeLldbHarness.isAvailable())
+                throw IllegalStateException("CodeLLDB adapter not available (run scripts/download-codelldb-vsix.sh or set KDAP_CODELDB_EXTENSION)")
+            val (process, port) = CodeLldbHarness.startAdapterTcp()
+            val socket = DapProcessHarness.connectToPort(port, 30_000).apply { soTimeout = 15_000 }
+            return object : ConnectionContext {
+                override val inputStream: InputStream = socket.getInputStream()
+                override val outputStream: OutputStream = socket.getOutputStream()
+                override fun close() {
+                    socket.close()
+                    CodeLldbHarness.stopProcess(process)
+                }
+            }
+        }
     };
 
     abstract fun connect(): ConnectionContext
 
     companion object {
-        /** Modes that run our KDAP server (excludes lldb-dap). For parameterized tests that only target our server. */
+        /** Modes that run our KDAP server (excludes lldb-dap, codelldb). For parameterized tests that only target our server. */
         @JvmStatic
         fun ourServerModes(): List<ConnectionMode> = entries.filter { it.serverKind == ServerKind.OUR_SERVER }
+
+        /** Modes that connect to the CodeLLDB adapter (stdio or TCP). For parameterized tests that target CodeLLDB. */
+        @JvmStatic
+        fun codelldbModes(): List<ConnectionMode> = entries.filter { it.serverKind == ServerKind.CODELDB }
     }
 }
 

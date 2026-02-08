@@ -70,6 +70,10 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y libxml2 libncurses6 libpython3.10
 
+      - name: Download CodeLLDB VSIX (macOS)
+        if: matrix.os == 'macos-latest'
+        run: ./scripts/download-codelldb-vsix.sh
+
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:

@@ -6,7 +6,40 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
+
+/** Runs shell commands to diagnose why a port never became reachable; returns combined output. */
+private fun runPortDiagnostics(port: Int, process: Process): String {
+    val out = StringBuilder()
+    fun run(vararg cmd: String) {
+        try {
+            val p = ProcessBuilder(*cmd).redirectErrorStream(true).start()
+            if (!p.waitFor(5, TimeUnit.SECONDS)) p.destroyForcibly()
+            out.append("$ ").append(cmd.joinToString(" ")).append("\n")
+            out.append(p.inputStream.bufferedReader(Charsets.UTF_8).readText().take(500))
+            if (out.lastOrNull() != '\n') out.append('\n')
+        } catch (e: Exception) {
+            out.append("(failed: ${e.message})\n")
+        }
+    }
+    val pid = if (process.isAlive) process.pid().toString() else "exited"
+    out.append("--- port=$port pid=$pid ---\n")
+    val os = System.getProperty("os.name").lowercase()
+    when {
+        os.contains("linux") -> {
+            run("ss", "-tlnp")
+            run("lsof", "-i", ":$port")
+            if (process.isAlive) run("ps", "-p", process.pid().toString(), "-o", "pid,state,etime,args")
+        }
+        os.contains("mac") || os.contains("darwin") -> {
+            run("lsof", "-i", ":$port")
+            if (process.isAlive) run("ps", "-p", process.pid().toString(), "-o", "pid,state,etime,command")
+        }
+        else -> run("netstat", "-an")
+    }
+    return out.toString()
+}
 
 /**
  * Which server the connection talks to. Use in tests to expect different results.
@@ -107,7 +140,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                 }
             }
             return try {
-                val socket = DapProcessHarness.connectToPort(port, 30_000).apply { soTimeout = 15_000 }
+                val socket = DapProcessHarness.connectToPort(port, 60_000).apply { soTimeout = 15_000 }
                 object : ConnectionContext {
                     override val inputStream: InputStream = socket.getInputStream()
                     override val outputStream: OutputStream = socket.getOutputStream()
@@ -117,11 +150,18 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                     }
                 }
             } catch (e: IllegalStateException) {
+                val diagnostics = runPortDiagnostics(port, process)
                 LldbDapHarness.stopProcess(process)
                 val exitInfo = if (!process.isAlive) " (lldb-dap exited with ${process.exitValue()})" else ""
                 val out = stdoutBuf.toString().trim().takeLast(2000).ifEmpty { "(no stdout)" }
                 val err = stderrBuf.toString().trim().takeLast(2000).ifEmpty { "(no stderr)" }
-                throw IllegalStateException("${e.message}$exitInfo\nlldb-dap stdout:\n$out\nlldb-dap stderr:\n$err", e)
+                val emptyNote = if (out == "(no stdout)" && err == "(no stderr)")
+                    "\n(Empty stdout/stderr is common: lldb-dap redirects them after startup.)"
+                else ""
+                throw IllegalStateException(
+                    "${e.message}$exitInfo$emptyNote\nlldb-dap stdout:\n$out\nlldb-dap stderr:\n$err\nDiagnostics:\n$diagnostics",
+                    e
+                )
             }
         }
     };

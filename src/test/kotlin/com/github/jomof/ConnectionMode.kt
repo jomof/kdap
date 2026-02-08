@@ -140,7 +140,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                 }
             }
             return try {
-                val socket = DapProcessHarness.connectToPort(port, 60_000).apply { soTimeout = 15_000 }
+                val socket = DapProcessHarness.connectToPort(port, 120_000).apply { soTimeout = 15_000 }
                 object : ConnectionContext {
                     override val inputStream: InputStream = socket.getInputStream()
                     override val outputStream: OutputStream = socket.getOutputStream()
@@ -158,8 +158,9 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                 val emptyNote = if (out == "(no stdout)" && err == "(no stderr)")
                     "\n(Empty stdout/stderr is common: lldb-dap redirects them after startup.)"
                 else ""
+                val portNote = "\n(If Diagnostics show process running but port not in ss -tlnp, lldb-dap is stuck in init before bind.)"
                 throw IllegalStateException(
-                    "${e.message}$exitInfo$emptyNote\nlldb-dap stdout:\n$out\nlldb-dap stderr:\n$err\nDiagnostics:\n$diagnostics",
+                    "${e.message}$exitInfo$emptyNote$portNote\nlldb-dap stdout:\n$out\nlldb-dap stderr:\n$err\nDiagnostics:\n$diagnostics",
                     e
                 )
             }

@@ -94,14 +94,16 @@ jobs:
           [[ "$PLATFORM_ID" == win32-* ]] && EXE="${EXE}.exe"
           echo "Checking: $EXE"
           ls -la "$EXE" || { echo "lldb-dap not found!"; exit 1; }
-          # On Windows, list DLLs in bin/ and show dependencies for diagnostics.
+
           if [[ "$PLATFORM_ID" == win32-* ]]; then
             echo "--- DLLs in bin/ ---"
             ls "prebuilts/lldb/$PLATFORM_ID/bin/"*.dll 2>/dev/null | head -30 || echo "(none)"
             echo "--- Python on PATH ---"
             python --version 2>&1 || echo "(python not found)"
-            python -c "import sys; print(sys.prefix)" 2>&1 || true
+            echo "--- Checking DLL dependencies ---"
+            python scripts/check-dll-deps.py "prebuilts/lldb/$PLATFORM_ID/bin" 2>&1 || true
           fi
+
           echo "--- lldb-dap --version ---"
           "$EXE" --version 2>&1
           echo "lldb-dap verified successfully"

@@ -87,3 +87,12 @@ jobs:
           test -f "$PREBUILTS/bin/lldb-dap" || test -f "$PREBUILTS/bin/lldb-dap.exe" || exit 1
           test -f "$PREBUILTS/bin/lldb-server" || test -f "$PREBUILTS/bin/lldb-server.exe" || exit 1
           echo "lldb-dap and lldb-server present in prebuilts."
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Run tests
+        run: ./gradlew test

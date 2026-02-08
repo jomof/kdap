@@ -49,26 +49,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Cache LLDB prebuilts
+        uses: actions/cache@v4
+        with:
+          path: prebuilts/lldb/${{ matrix.platform_id }}
+          key: lldb-${{ matrix.platform_id }}-${{ env.LLVM_VERSION }}
+
       - name: Download LLDB prebuilts
         env:
           PLATFORM_ID: ${{ matrix.platform_id }}
           LLVM_VERSION: ${{ env.LLVM_VERSION }}
         run: ./scripts/download-lldb.sh
 
-      - name: Verify prebuilts layout
-        run: |
-          PREBUILTS="${{ github.workspace }}/prebuilts/lldb/${{ matrix.platform_id }}"
-          echo "Contents of $PREBUILTS/bin:"
-          ls -la "$PREBUILTS/bin" 2>/dev/null || dir "$PREBUILTS\\bin" 2>nul
-          test -f "$PREBUILTS/bin/lldb-dap" || test -f "$PREBUILTS/bin/lldb-dap.exe" || exit 1
-          test -f "$PREBUILTS/bin/lldb-server" || test -f "$PREBUILTS/bin/lldb-server.exe" || exit 1
-          echo "lldb-dap and lldb-server present in prebuilts."
-
       - name: Install lldb-dap runtime deps (Linux)
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y libxml2 libncurses6 libpython3.10
+
+      - name: Cache CodeLLDB VSIX
+        if: matrix.os == 'macos-latest'
+        uses: actions/cache@v4
+        with:
+          path: codelldb-vsix
+          key: codelldb-vsix-${{ runner.arch }}
 
       - name: Download CodeLLDB VSIX (macOS)
         if: matrix.os == 'macos-latest'

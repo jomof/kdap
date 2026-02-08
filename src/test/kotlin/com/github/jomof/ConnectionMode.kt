@@ -88,13 +88,19 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             }
         }
     },
-    /** Connects to lldb-dap via TCP (-p port). Stderr is captured and included on failure (keep this for CI diagnostics). */
+    /** Connects to lldb-dap via TCP (-p port). Stdout and stderr captured on failure (keep for CI diagnostics). */
     TCP_LLDB(ServerKind.LLDB_DAP) {
         override fun connect(): ConnectionContext {
             if (!LldbDapHarness.isAvailable())
                 throw IllegalStateException("lldb-dap not available (run scripts/download-lldb.sh or set KDAP_LLDB_ROOT)")
             val (process, port) = LldbDapHarness.startLldbDapTcp()
+            val stdoutBuf = StringBuilder()
             val stderrBuf = StringBuilder()
+            thread(isDaemon = true) {
+                process.inputStream.bufferedReader(Charsets.UTF_8).use { r ->
+                    r.lineSequence().forEach { stdoutBuf.appendLine(it) }
+                }
+            }
             thread(isDaemon = true) {
                 process.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
                     r.lineSequence().forEach { stderrBuf.appendLine(it) }
@@ -113,8 +119,9 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             } catch (e: IllegalStateException) {
                 LldbDapHarness.stopProcess(process)
                 val exitInfo = if (!process.isAlive) " (lldb-dap exited with ${process.exitValue()})" else ""
-                val stderrSnippet = stderrBuf.toString().trim().takeLast(2000).ifEmpty { "(no stderr)" }
-                throw IllegalStateException("${e.message}$exitInfo\nlldb-dap stderr:\n$stderrSnippet", e)
+                val out = stdoutBuf.toString().trim().takeLast(2000).ifEmpty { "(no stdout)" }
+                val err = stderrBuf.toString().trim().takeLast(2000).ifEmpty { "(no stderr)" }
+                throw IllegalStateException("${e.message}$exitInfo\nlldb-dap stdout:\n$out\nlldb-dap stderr:\n$err", e)
             }
         }
     };

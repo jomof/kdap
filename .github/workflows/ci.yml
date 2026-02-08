@@ -52,7 +52,7 @@ jobs:
 
       - name: Cache LLDB build
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: lldb-build
           key: lldb-${{ matrix.os }}-${{ matrix.platform_id }}-${{ env.LLVM_TAG }}

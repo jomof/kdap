@@ -78,3 +78,49 @@ jobs:
 
       - name: Run tests
         run: ./gradlew test
+
+  lldb-dap-smoke:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download LLDB prebuilts
+        env:
+          PLATFORM_ID: linux-x64
+          LLVM_VERSION: ${{ env.LLVM_VERSION }}
+        run: ./scripts/download-lldb.sh
+
+      - name: Install lldb-dap runtime deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libxml2 libncurses6 libpython3.10
+
+      - name: lldb-dap --help
+        run: |
+          export LD_LIBRARY_PATH="${{ github.workspace }}/prebuilts/lldb/linux-x64/lib"
+          export PYTHONPATH="${{ github.workspace }}/prebuilts/lldb/linux-x64/local/lib/python3.10/dist-packages"
+          "${{ github.workspace }}/prebuilts/lldb/linux-x64/bin/lldb-dap" --help
+
+      - name: lldb-dap -p (prototypical TCP listen)
+        run: |
+          export LD_LIBRARY_PATH="${{ github.workspace }}/prebuilts/lldb/linux-x64/lib"
+          export PYTHONPATH="${{ github.workspace }}/prebuilts/lldb/linux-x64/local/lib/python3.10/dist-packages"
+          PORT=19999
+          BIN="${{ github.workspace }}/prebuilts/lldb/linux-x64/bin/lldb-dap"
+          echo "Starting lldb-dap -p $PORT in background (will run up to 15s)..."
+          $BIN -p "$PORT" 2>&1 &
+          PID=$!
+          for i in $(seq 1 15); do
+            if ss -tlnp 2>/dev/null | grep -q ":$PORT "; then
+              echo "Port $PORT became reachable after ${i}s (pid $PID)."
+              break
+            fi
+            sleep 1
+          done
+          if ! ss -tlnp 2>/dev/null | grep -q ":$PORT "; then
+            echo "Port $PORT never appeared in ss -tlnp after 15s."
+          fi
+          kill $PID 2>/dev/null || true
+          wait $PID 2>/dev/null || true
+          echo "--- done (lldb-dap exit: $?)"

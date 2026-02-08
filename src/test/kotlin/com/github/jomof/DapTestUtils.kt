@@ -1,6 +1,8 @@
 package com.github.jomof
 
 import com.github.jomof.dap.DapRequestHandler
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
@@ -63,6 +65,56 @@ object DapTestUtils {
             responseBody.contains("\"command\":\"initialize\"") && responseBody.contains("\"body\""),
             "Response should be initialize response with body: $responseBody"
         )
+    }
+
+    /**
+     * Parses DAP initialize response and returns the capabilities object.
+     * Standard DAP: body has a nested "capabilities" object. Some servers send body as the capabilities directly.
+     */
+    fun parseInitializeCapabilities(responseBody: String): JSONObject {
+        val response = JSONObject(responseBody)
+        val body = response.optJSONObject("body") ?: throw org.json.JSONException("Response has no 'body'")
+        return if (body.has("capabilities")) body.getJSONObject("capabilities") else body
+    }
+
+    /**
+     * Compares actual capabilities (from server response) to the expected baseline (JSON string).
+     * Returns null if they match; otherwise returns a human-readable diff (missing keys, wrong values).
+     * Baseline is the minimum we converge to: every key in expected must exist in actual with the same value.
+     * Actual may have extra keys (e.g. CodeLLDB's exceptionBreakpointFilters); those are not reported as diffs.
+     */
+    fun compareCapabilitiesToBaseline(actual: JSONObject, expectedBaselineJson: String): String? {
+        val expected = JSONObject(expectedBaselineJson)
+        val diffs = mutableListOf<String>()
+        for (key in expected.keySet()) {
+            if (!actual.has(key)) {
+                diffs.add("missing: $key (expected: ${expected.get(key)})")
+            } else {
+                val a = actual.get(key)
+                val e = expected.get(key)
+                if (!jsonValueEquals(a, e)) {
+                    diffs.add("$key: expected $e, actual $a")
+                }
+            }
+        }
+        return if (diffs.isEmpty()) null else diffs.joinToString("\n")
+    }
+
+    private fun jsonValueEquals(a: Any?, e: Any?): Boolean {
+        if (a == null && e == null) return true
+        if (a == null || e == null) return false
+        if (a is Boolean && e is Boolean) return a == e
+        if (a is Number && e is Number) return a.toString() == e.toString()
+        if (a is String && e is String) return a == e
+        if (a is JSONObject && e is JSONObject) {
+            if (a.keySet() != e.keySet()) return false
+            return a.keySet().all { jsonValueEquals(a.opt(it), e.opt(it)) }
+        }
+        if (a is JSONArray && e is JSONArray) {
+            if (a.length() != e.length()) return false
+            return (0 until a.length()).all { jsonValueEquals(a.opt(it), e.opt(it)) }
+        }
+        return a == e
     }
 
     /** DAP error response: success false, message (internal error or method not found). */

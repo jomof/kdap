@@ -12,6 +12,7 @@ repositories {
 dependencies {
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter-params")
+    testImplementation("org.json:json:20231013")
 }
 
 kotlin {

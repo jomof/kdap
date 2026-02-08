@@ -76,6 +76,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y libxml2 libncurses6 libpython3.10
 
+      # lldb-dap.exe links against Python (scripting support). Install the
+      # matching Python so its DLLs are on PATH. The LLVM 21 MSVC build
+      # uses Python 3.12; if the version changes, the verify step below
+      # will catch it (STATUS_DLL_NOT_FOUND = exit code -1073741515).
+      - name: Install lldb-dap runtime deps (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Verify lldb-dap
         env:
           PLATFORM_ID: ${{ matrix.platform_id }}
@@ -84,8 +94,17 @@ jobs:
           [[ "$PLATFORM_ID" == win32-* ]] && EXE="${EXE}.exe"
           echo "Checking: $EXE"
           ls -la "$EXE" || { echo "lldb-dap not found!"; exit 1; }
+          # On Windows, list DLLs in bin/ and show dependencies for diagnostics.
+          if [[ "$PLATFORM_ID" == win32-* ]]; then
+            echo "--- DLLs in bin/ ---"
+            ls "prebuilts/lldb/$PLATFORM_ID/bin/"*.dll 2>/dev/null | head -30 || echo "(none)"
+            echo "--- Python on PATH ---"
+            python --version 2>&1 || echo "(python not found)"
+            python -c "import sys; print(sys.prefix)" 2>&1 || true
+          fi
           echo "--- lldb-dap --version ---"
-          "$EXE" --version 2>&1 || echo "(exit code: $?)"
+          "$EXE" --version 2>&1
+          echo "lldb-dap verified successfully"
 
       - name: Run tests
         run: ./gradlew test

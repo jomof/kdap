@@ -37,6 +37,14 @@ case "$OS" in
       exit 1
     fi
     ;;
+  MINGW*|MSYS*|CYGWIN*)
+    if [[ "$ARCH" == "x86_64" ]]; then
+      VSIX_NAME="codelldb-win32-x64.vsix"
+    else
+      echo "Unsupported Windows arch: $ARCH" >&2
+      exit 1
+    fi
+    ;;
   *)
     echo "Unsupported OS: $OS" >&2
     exit 1

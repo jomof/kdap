@@ -210,6 +210,13 @@ class LldbDapProcess private constructor(
                         env["PYTHONPATH"] = pythonSite.absolutePath
                     }
                 }
+                // Windows: prepend bin/ to PATH so lldb-dap.exe finds liblldb.dll.
+                "win" in os -> {
+                    val binPath = File(platformDir, "bin").absolutePath
+                    env["PATH"] = env["PATH"]
+                        ?.let { "$binPath;$it" }
+                        ?: binPath
+                }
             }
         }
     }

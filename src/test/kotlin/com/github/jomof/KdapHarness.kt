@@ -1,5 +1,6 @@
 package com.github.jomof
 
+import java.io.File
 import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
 
@@ -22,7 +23,7 @@ object KdapHarness {
      */
     fun startAdapter(vararg args: String): Process {
         val javaHome = System.getProperty("java.home")
-        val javaBin = "$javaHome/bin/java"
+        val javaBin = File(File(javaHome, "bin"), "java").absolutePath
         val classpath = System.getProperty("java.class.path")
         val lldbDapPath = resolveLldbDapPath()
         val cmd = mutableListOf(javaBin, "-cp", classpath, MAIN_CLASS)

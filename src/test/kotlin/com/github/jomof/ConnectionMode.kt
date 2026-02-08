@@ -88,21 +88,33 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             }
         }
     },
-    /** Connects to lldb-dap via TCP (--connection listen). Avoids stdio buffering issues when run from JVM. */
+    /** Connects to lldb-dap via TCP (-p port). Captures stderr so CI logs show why it failed if port never becomes reachable. */
     TCP_LLDB(ServerKind.LLDB_DAP) {
         override fun connect(): ConnectionContext {
             if (!LldbDapHarness.isAvailable())
                 throw IllegalStateException("lldb-dap not available (run scripts/download-lldb.sh or set KDAP_LLDB_ROOT)")
             val (process, port) = LldbDapHarness.startLldbDapTcp()
-            // 30s connect: lldb-dap can be slow to bind in Docker/emulated environments
-            val socket = DapProcessHarness.connectToPort(port, 30_000).apply { soTimeout = 15_000 }
-            return object : ConnectionContext {
-                override val inputStream: InputStream = socket.getInputStream()
-                override val outputStream: OutputStream = socket.getOutputStream()
-                override fun close() {
-                    socket.close()
-                    LldbDapHarness.stopProcess(process)
+            val stderrBuf = StringBuilder()
+            thread(isDaemon = true) {
+                process.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
+                    r.lineSequence().forEach { stderrBuf.appendLine(it) }
                 }
+            }
+            return try {
+                val socket = DapProcessHarness.connectToPort(port, 30_000).apply { soTimeout = 15_000 }
+                object : ConnectionContext {
+                    override val inputStream: InputStream = socket.getInputStream()
+                    override val outputStream: OutputStream = socket.getOutputStream()
+                    override fun close() {
+                        socket.close()
+                        LldbDapHarness.stopProcess(process)
+                    }
+                }
+            } catch (e: IllegalStateException) {
+                LldbDapHarness.stopProcess(process)
+                val exitInfo = if (!process.isAlive) " (lldb-dap exited with ${process.exitValue()})" else ""
+                val stderrSnippet = stderrBuf.toString().trim().takeLast(2000).ifEmpty { "(no stderr)" }
+                throw IllegalStateException("${e.message}$exitInfo\nlldb-dap stderr:\n$stderrSnippet", e)
             }
         }
     };

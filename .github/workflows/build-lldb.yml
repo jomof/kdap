@@ -54,7 +54,13 @@ jobs:
         env:
           PLATFORM_ID: ${{ matrix.platform_id }}
           LLVM_TAG: ${{ env.LLVM_TAG }}
-        run: ./scripts/build-lldb.ps1
+        run: |
+          # Load Visual Studio environment so CMake and Ninja use MSVC (cl.exe).
+          # Without this, a different compiler may be picked and the LLVM build can fail.
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+          cmd /c "`"$vcvars`" && set" | ForEach-Object { if ($_ -match "^(.*?)=(.*)$") { [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process") } }
+          ./scripts/build-lldb.ps1
 
       - name: Verify prebuilts layout
         run: |

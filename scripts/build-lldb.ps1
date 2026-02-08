@@ -53,6 +53,10 @@ cmake -B $BuildDir -G Ninja `
 # Build and install to staging
 Write-Host "Building and installing to staging (lldb, lldb-server, lldb-dap + install deps)..."
 ninja -C $BuildDir install
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Build failed (ninja exit code $LASTEXITCODE). Not copying to prebuilts."
+    exit $LASTEXITCODE
+}
 
 # Copy only the binaries we need into source-controlled prebuilts
 Write-Host "Copying lldb-dap, lldb-server, liblldb to $OutputPrefix..."

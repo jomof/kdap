@@ -94,7 +94,8 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             if (!LldbDapHarness.isAvailable())
                 throw IllegalStateException("lldb-dap not available (run scripts/download-lldb.sh or set KDAP_LLDB_ROOT)")
             val (process, port) = LldbDapHarness.startLldbDapTcp()
-            val socket = DapProcessHarness.connectToPort(port, 10_000).apply { soTimeout = 15_000 }
+            // 30s connect: lldb-dap can be slow to bind in Docker/emulated environments
+            val socket = DapProcessHarness.connectToPort(port, 30_000).apply { soTimeout = 15_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = socket.getInputStream()
                 override val outputStream: OutputStream = socket.getOutputStream()

@@ -8,6 +8,8 @@ import java.util.concurrent.TimeUnit
 /**
  * Test harness for starting lldb-dap (the LLVM DAP server) so tests can run
  * against it directly. Uses [KDAP_LLDB_ROOT] or `prebuilts/lldb` + platform id.
+ * Platform is derived from the JVM's os.name/os.arch (e.g. in Docker on ARM Mac
+ * the container is linux-arm64, so use --platform linux/amd64 to match linux-x64 prebuilts).
  * Run scripts/download-lldb.sh to populate prebuilts for the current platform.
  *
  * Official lldb-dap uses -p / --port for TCP: it listens on the given port and
@@ -58,6 +60,8 @@ object LldbDapHarness {
             if (os.contains("linux")) {
                 val libPath = libDir.absolutePath
                 env["LD_LIBRARY_PATH"] = (env["LD_LIBRARY_PATH"]?.let { "$libPath:$it" } ?: libPath)
+                val pythonSite = File(platformDir, "local/lib/python3.10/dist-packages")
+                if (pythonSite.exists()) env["PYTHONPATH"] = pythonSite.absolutePath
             }
         }
         return processBuilder.start()

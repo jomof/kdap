@@ -2,10 +2,11 @@ package com.github.jomof
 
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.EnumSource
+import org.junit.jupiter.params.provider.MethodSource
 
 /**
- * Tests that the DAP server responds to `initialize`. Runs the same assertion
- * for each connection mode: stdio, TCP listen, TCP connect, and in-process (pipes).
+ * Tests that the DAP server responds to `initialize`. Runs for each connection mode
+ * (our server: stdio, TCP listen, TCP connect, in-process; lldb-dap: TCP_LLDB).
  */
 class DapInitializeTest {
 
@@ -18,10 +19,10 @@ class DapInitializeTest {
         }
     }
 
-    /** Exercises the server's catch block: a request that throws returns a JSON-RPC internal error. */
+    /** Exercises our server's catch block: _triggerError throws, server returns internal error. */
     @ParameterizedTest(name = "{0}")
-    @EnumSource(ConnectionMode::class)
-    fun `triggerError request receives internal error response`(mode: ConnectionMode) {
+    @MethodSource("com.github.jomof.ConnectionMode#ourServerModes")
+    fun `triggerError request receives expected error response`(mode: ConnectionMode) {
         mode.connect().use { ctx ->
             DapTestUtils.sendTriggerErrorRequest(ctx.outputStream)
             val responseBody = DapTestUtils.readResponseBody(ctx.inputStream)

@@ -9,13 +9,19 @@ import java.nio.charset.StandardCharsets
 object DapTestUtils {
     private const val CONTENT_LENGTH_PREFIX = "Content-Length: "
 
+    /** DAP initialize request (same format for our server and lldb-dap). */
     fun sendInitializeRequest(output: OutputStream) {
-        sendRequest(output, """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""")
+        sendRequest(output, """{"type":"request","seq":1,"command":"initialize","arguments":{"adapterID":"lldb","pathFormat":"path"}}""")
     }
 
-    /** Sends a request that causes the server to hit its catch block (internal error response). */
+    /** Sends a request that causes our server to hit its catch block (internal error response). */
     fun sendTriggerErrorRequest(output: OutputStream) {
-        sendRequest(output, """{"jsonrpc":"2.0","id":42,"method":"${DapRequestHandler.METHOD_TRIGGER_ERROR}","params":{}}""")
+        sendRequest(output, """{"type":"request","seq":42,"command":"${DapRequestHandler.METHOD_TRIGGER_ERROR}","arguments":{}}""")
+    }
+
+    /** Unknown command (lldb-dap returns success: false; our server returns method not found). */
+    fun sendUnknownCommandRequest(output: OutputStream) {
+        sendRequest(output, """{"type":"request","seq":42,"command":"UnknownCommand","arguments":{}}""")
     }
 
     private fun sendRequest(output: OutputStream, requestBody: String) {
@@ -47,30 +53,23 @@ object DapTestUtils {
         return readResponseBody(input)
     }
 
+    /** DAP success response: success true, command initialize, body with capabilities. */
     fun assertValidInitializeResponse(responseBody: String) {
         org.junit.jupiter.api.Assertions.assertTrue(
-            responseBody.contains("\"result\""),
-            "Response should contain result: $responseBody"
-        )
-        org.junit.jupiter.api.Assertions.assertFalse(
-            responseBody.contains("\"error\""),
-            "Response should not be error: $responseBody"
+            responseBody.contains("\"success\":true"),
+            "Response should be success: $responseBody"
         )
         org.junit.jupiter.api.Assertions.assertTrue(
-            responseBody.contains("capabilities"),
-            "Response should contain capabilities: $responseBody"
+            responseBody.contains("\"command\":\"initialize\"") && responseBody.contains("\"body\""),
+            "Response should be initialize response with body: $responseBody"
         )
     }
 
-    /** Asserts the response is a JSON-RPC internal error (-32603) with the expected message. */
+    /** DAP error response: success false, message (internal error or method not found). */
     fun assertInternalErrorResponse(responseBody: String, expectedMessage: String = DapRequestHandler.INTERNAL_ERROR_MESSAGE) {
         org.junit.jupiter.api.Assertions.assertTrue(
-            responseBody.contains("\"error\""),
-            "Response should contain error: $responseBody"
-        )
-        org.junit.jupiter.api.Assertions.assertTrue(
-            responseBody.contains("-32603"),
-            "Response should contain internal error code -32603: $responseBody"
+            responseBody.contains("\"success\":false"),
+            "Response should be error: $responseBody"
         )
         org.junit.jupiter.api.Assertions.assertTrue(
             responseBody.contains(expectedMessage),

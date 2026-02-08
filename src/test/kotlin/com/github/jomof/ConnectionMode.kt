@@ -1,6 +1,7 @@
 package com.github.jomof
 
 import com.github.jomof.dap.DapServer
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
@@ -8,11 +9,22 @@ import java.util.concurrent.CountDownLatch
 import kotlin.concurrent.thread
 
 /**
+ * Which server the connection talks to. Use in tests to expect different results.
+ */
+enum class ServerKind {
+    /** Our KDAP server (MainKt). */
+    OUR_SERVER,
+    /** lldb-dap from LLVM prebuilts. */
+    LLDB_DAP
+}
+
+/**
  * Ways to connect to the DAP server process for tests. Use [connect] to get a
  * [ConnectionContext] (streams + cleanup); use [ConnectionContext.close] when done.
+ * [serverKind] indicates whether this mode talks to our server or lldb-dap (for test branching).
  */
-enum class ConnectionMode {
-    STDIO {
+enum class ConnectionMode(val serverKind: ServerKind) {
+    STDIO(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
             val process = DapProcessHarness.startProcess()
             return object : ConnectionContext {
@@ -22,7 +34,7 @@ enum class ConnectionMode {
             }
         }
     },
-    TCP_LISTEN {
+    TCP_LISTEN(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
             val freePort = ServerSocket(0).use { it.localPort }
             val process = DapProcessHarness.startProcess("--port", freePort.toString())
@@ -37,7 +49,7 @@ enum class ConnectionMode {
             }
         }
     },
-    TCP_CONNECT {
+    TCP_CONNECT(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
             val server = ServerSocket(0)
             val port = server.localPort
@@ -54,7 +66,7 @@ enum class ConnectionMode {
             }
         }
     },
-    IN_PROCESS {
+    IN_PROCESS(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
             val serverInput = java.io.PipedInputStream()
             val testToServer = java.io.PipedOutputStream(serverInput)
@@ -75,15 +87,40 @@ enum class ConnectionMode {
                 }
             }
         }
+    },
+    /** Connects to lldb-dap via TCP (--connection listen). Avoids stdio buffering issues when run from JVM. */
+    TCP_LLDB(ServerKind.LLDB_DAP) {
+        override fun connect(): ConnectionContext {
+            if (!LldbDapHarness.isAvailable())
+                throw IllegalStateException("lldb-dap not available (run scripts/download-lldb.sh or set KDAP_LLDB_ROOT)")
+            val (process, port) = LldbDapHarness.startLldbDapTcp()
+            val socket = DapProcessHarness.connectToPort(port, 10_000).apply { soTimeout = 15_000 }
+            return object : ConnectionContext {
+                override val inputStream: InputStream = socket.getInputStream()
+                override val outputStream: OutputStream = socket.getOutputStream()
+                override fun close() {
+                    socket.close()
+                    LldbDapHarness.stopProcess(process)
+                }
+            }
+        }
     };
 
     abstract fun connect(): ConnectionContext
+
+    companion object {
+        /** Modes that run our KDAP server (excludes lldb-dap). For parameterized tests that only target our server. */
+        @JvmStatic
+        fun ourServerModes(): List<ConnectionMode> = entries.filter { it.serverKind == ServerKind.OUR_SERVER }
+    }
 }
 
 /**
  * A connection to the DAP server: input/output streams and [close] for cleanup.
+ * [stderr] is non-empty only for STDIO_LLDB (lldb-dap's stderr capture for diagnostics).
  */
 interface ConnectionContext : AutoCloseable {
     val inputStream: InputStream
     val outputStream: OutputStream
+    val stderr: String get() = ""
 }

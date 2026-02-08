@@ -12,33 +12,19 @@ A feature-rich Debug Adapter Protocol (DAP) implementation in Kotlin, built as a
 |----------|------|--------|
 | **lldb-dap** | Baseline DAP server we wrap | LLVM repo: `lldb/tools/lldb-dap`. Speaks DAP over stdio. |
 | **lldb-server** | Remote debug server on target | For remote-forward: runs on device/remote host. |
-| **liblldb** (e.g. `liblldb.so` / `LLDB.dylib` / `liblldb.dll`) | Used by lldb-dap at runtime | Produced by the same build as lldb-dap. |
-| **Build toolchain** | Building LLDB from source | CMake, Ninja, C/C++ compiler; see §1.2. |
+| **liblldb** (e.g. `liblldb.so` / `LLDB.dylib` / `liblldb.dll`) | Used by lldb-dap at runtime | Included in the official LLVM release. |
 
-For the **decorator** approach we do **not** need to link against liblldb in the Kotlin process; we only need the **lldb-dap** binary (and, for remote, **lldb-server** on the remote side). We **build LLDB from source** and install into the layout in §1.3 so that KDAP can run lldb-dap and tests can use lldb-server.
+We **download the official LLVM release** for the current platform and extract only `bin/lldb-dap`, `bin/lldb-server`, and `lib/` into **`prebuilts/lldb/<platform-id>/`** per §1.3 so that KDAP can run lldb-dap and tests can use lldb-server.
 
-### 1.2 Building LLDB from source (implemented)
+### 1.2 Downloading LLDB prebuilts (implemented)
 
-We **build LLDB (and thus lldb-dap and lldb-server) from source** using the official [llvm/llvm-project](https://github.com/llvm/llvm-project) repository. The build is driven by scripts and CI as follows.
+We **download** the official [LLVM release](https://github.com/llvm/llvm-project/releases) for the current platform and extract only the files we need.
 
-- **Scripts**
-  - **Unix (Linux, macOS)**: Run `./scripts/build-lldb.sh` from the project root. No arguments; use env vars to override defaults.
-  - **Windows**: Run `./scripts/build-lldb.ps1` (PowerShell) from the project root; use the same env vars. Requires Visual Studio with “Desktop development with C++”, CMake, Ninja, and Git.
-  - **Env vars**: `LLVM_TAG` (default: `llvmorg-18.1.8`), `PLATFORM_ID` (default: auto-detected from OS/arch). The script clones, configures, builds to a staging dir, then **copies** only lldb-dap, lldb-server, and liblldb into **`prebuilts/lldb/<platform-id>/`** (source-controlled).
-
-- **Output (source-controlled)**
-  - The scripts write only the binaries we need into **`prebuilts/lldb/<platform-id>/`**: `bin/lldb-dap`, `bin/lldb-server`, and `lib/liblldb.*`. This directory is **source-controlled** so that KDAP can use `prebuilts/lldb` as the default `KDAP_LLDB_ROOT`.
-
-- **Build debris (not source-controlled)**
-  - All build output lives under **.gitignore**: `lldb-build/` (clone, build tree, and staging install). Nothing under `lldb-build/` is committed.
-  - **`lldb-build/`** contains: `llvm-project/` (shallow clone at `LLVM_TAG`), `build/` (CMake build tree), and `install-staging/<platform-id>/` (full CMake install; script copies from here into prebuilts).
-
-- **Prerequisites**: CMake (3.20+), Ninja, Git. C/C++ compiler: Clang or GCC on Unix; MSVC on Windows (Visual Studio). Python 3 is required by the LLDB build. On Windows, run from “x64 Native Tools Command Prompt” or ensure the VS environment is loaded.
-
-- **Configure and build (what the script does)**
-  - Clone (or reuse) `llvm-project` at `LLVM_TAG` into `lldb-build/llvm-project`.
-  - Configure with CMake in `lldb-build/build`: `-DCMAKE_INSTALL_PREFIX=lldb-build/install-staging/<platform-id>`, `-DLLVM_ENABLE_PROJECTS="clang;lldb"`, `-DLLVM_TARGETS_TO_BUILD=host`, `-DLLVM_INCLUDE_TESTS=OFF`, `-DCMAKE_BUILD_TYPE=RelWithDebInfo`.
-  - Run **`ninja install`** into the staging prefix; then **copy** only `bin/lldb-dap*`, `bin/lldb-server*`, and `lib/liblldb*` into **`prebuilts/lldb/<platform-id>/`** per §1.3.
+- **Script**: Run **`./scripts/download-lldb.sh`** from the project root (bash; works on Linux, macOS, and Windows via Git Bash). No arguments; use env vars to override.
+- **Env vars**: `LLVM_VERSION` (default: `21.1.8`), `PLATFORM_ID` (default: auto-detected from OS/arch).
+- **Download location (gitignored)**: Archives are downloaded to **`.lldb-download/`**. The script skips download if the archive is already present.
+- **Extraction**: Only **`bin/lldb-dap`**, **`bin/lldb-server`**, and **`lib/`** are extracted (no full unpack of the tarball). Output goes to **`prebuilts/lldb/<platform-id>/`** (source-controlled).
+- **Platforms**: `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`, `win32-x64`. The script maps OS/arch to the matching LLVM release archive URL.
 
 ### 1.3 Layout and discovery (multi-platform)
 
@@ -51,30 +37,28 @@ We **build LLDB (and thus lldb-dap and lldb-server) from source** using the offi
     - `<platform-id>/lib/liblldb.*` (`.so` / `.dylib` / `.dll` as appropriate) if lldb-dap expects it next to the binary.
   - Example: `$KDAP_LLDB_ROOT/darwin-arm64/bin/lldb-dap`, `$KDAP_LLDB_ROOT/linux-x64/bin/lldb-server`, etc.
 - **At runtime**: KDAP resolves the **current** platform id (e.g. from `os.name`/`os.arch` or a single env var `KDAP_PLATFORM`) and looks under `$KDAP_LLDB_ROOT/<platform-id>/`. No hardcoded absolute paths; use the host’s path separator and executable naming (e.g. `.exe` on Windows only).
-- **Discovery**: Env var `KDAP_LLDB_ROOT` (points at the root that contains platform-id subdirs) or a config file path; fallback to a well-known location relative to the KDAP distribution. The **canonical location** is **`prebuilts/lldb/`** (source-controlled); the build scripts copy the needed binaries there. If the root has no platform subdirs (legacy “flat” layout), we can support falling back to `bin/` and `lib/` directly under the root for a single-platform install.
+- **Discovery**: Env var `KDAP_LLDB_ROOT` (points at the root that contains platform-id subdirs) or a config file path; fallback to a well-known location relative to the KDAP distribution. The **canonical location** is **`prebuilts/lldb/`** (source-controlled); the download script extracts the needed binaries there.
 
 ### 1.4 CI (GitHub Actions) (implemented)
 
 - **Workflow**: `.github/workflows/ci.yml` runs on push/PR to `main` and on workflow_dispatch. Two jobs:
   - **assemble**: Runs on `ubuntu-latest`; runs `./gradlew assemble` to verify the Kotlin project builds.
-  - **build**: Matrix job that (1) runs the same LLDB build as local—**`scripts/build-lldb.sh`** on Linux/macOS, **`scripts/build-lldb.ps1`** on Windows—(2) verifies the prebuilts layout, (3) runs `./gradlew test`. No prebuilt downloads; the only source of binaries is our build.
-- **Caching**: The build job caches the **build tree** (`lldb-build/`) with key `lldb-${{ matrix.os }}-${{ matrix.platform_id }}-${{ env.LLVM_TAG }}`. Restore at the start of the job; if missing, the script runs the full build and the cache is saved. This keeps CI fast after the first run per platform/version.
-- **Matrix**: `ubuntu-latest` (linux-x64), `macos-latest` (darwin-arm64), `windows-latest` (win32-x64). Each build job sets `PLATFORM_ID` to the matrix value; the script writes into `prebuilts/lldb/<platform_id>/`. A “Verify prebuilts layout” step checks that `lldb-dap` and `lldb-server` are present there.
-- **Reproducibility**: The workflow sets `LLVM_TAG=llvmorg-18.1.8` (same default as the scripts). Change the tag in the workflow and in the scripts when upgrading; document in README/DEV.md.
+  - **build**: Matrix job that (1) runs **`scripts/download-lldb.sh`** with `PLATFORM_ID` and `LLVM_VERSION`, (2) verifies the prebuilts layout, (3) runs `./gradlew test`.
+- **Matrix**: `ubuntu-latest` (linux-x64), `macos-latest` (darwin-arm64), `windows-latest` (win32-x64). Each build job sets `PLATFORM_ID`; the script downloads (if not cached in the runner’s `.lldb-download/`) and extracts into `prebuilts/lldb/<platform_id>/`. A “Verify prebuilts layout” step checks that `lldb-dap` and `lldb-server` are present.
+- **Versioning**: The workflow sets `LLVM_VERSION=21.1.8`. Update in the workflow and in the script when upgrading.
 - **Dependency updates**: `.github/dependabot.yml` configures weekly updates for the Gradle and GitHub Actions ecosystems.
 
 ### 1.5 Summary table
 
 | Concern | Approach |
 |---------|----------|
-| Source of binaries | Build LLDB from source (llvm-project) only; no prebuilt packages |
-| Primary artifact | lldb-dap, lldb-server, liblldb produced by our build; copied into **`prebuilts/lldb/<platform-id>/`** (source-controlled) per §1.3 |
-| Build scripts | `scripts/build-lldb.sh` (Unix), `scripts/build-lldb.ps1` (Windows); env: `LLVM_TAG`, `PLATFORM_ID`; output: prebuilts/lldb |
-| Build debris (gitignored) | `lldb-build/` (clone + build tree + install-staging) |
+| Source of binaries | Official LLVM release tarballs; download per platform |
+| Primary artifact | lldb-dap, lldb-server, lib/ extracted into **`prebuilts/lldb/<platform-id>/`** (source-controlled) per §1.3 |
+| Download script | `scripts/download-lldb.sh`; env: `LLVM_VERSION`, `PLATFORM_ID`; downloads to `.lldb-download/` (gitignored); extracts only bin + lib to prebuilts |
 | Runtime deps | lldb-dap’s own deps (e.g. liblldb); we only spawn the process |
-| Remote | lldb-server from the same source build (same repo, same tag) |
-| CI | `.github/workflows/ci.yml`: assemble job (Gradle); build job runs script per matrix, caches `lldb-build/`, verifies prebuilts, runs Gradle test |
-| Versioning | Pinned tag `llvmorg-18.1.8` in scripts and workflow; update in both when upgrading |
+| Remote | lldb-server from the same release |
+| CI | `.github/workflows/ci.yml`: assemble job (Gradle); build job runs download script per matrix, verifies prebuilts, runs Gradle test |
+| Versioning | `LLVM_VERSION=21.1.8` in workflow and script; update in both when upgrading |
 
 ---
 
@@ -313,7 +297,7 @@ This is an initial design for iteration.
 
 **Implementation status**
 
-- **§1 Dependencies and CI**: Implemented. LLDB is built from source via `scripts/build-lldb.sh` (Unix) and `scripts/build-lldb.ps1` (Windows); output goes to `prebuilts/lldb/<platform-id>/`. CI (`.github/workflows/ci.yml`) runs Gradle assemble, a matrix LLDB build with caching, and Gradle test. Dependabot is configured for Gradle and GitHub Actions.
+- **§1 Dependencies and CI**: Implemented. LLDB prebuilts are downloaded via `scripts/download-lldb.sh` (official LLVM release per platform); output goes to `prebuilts/lldb/<platform-id>/`. CI (`.github/workflows/ci.yml`) runs Gradle assemble, a matrix download + test job, and Gradle test. Dependabot is configured for Gradle and GitHub Actions.
 - **§2–§5**: Design only; decorator pipeline and MVP features are not yet implemented.
 
 **Next priorities**

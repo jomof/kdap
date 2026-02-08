@@ -46,7 +46,7 @@ bin/
 ### Mac OS ###
 .DS_Store
 
-### LLDB build (from source) ###
-# Clone, build tree, and install output are not source-controlled.
+### LLDB (download script populates prebuilts/lldb only) ###
+.lldb-download/
 lldb-build/
 lldb-install/

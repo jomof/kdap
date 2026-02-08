@@ -1,5 +1,4 @@
-# Build LLDB from source per DESIGN.md §1.4. Uses scripts/build-lldb.sh (Unix) or
-# scripts/build-lldb.ps1 (Windows). Caches the build tree to speed up subsequent runs.
+# Download LLDB prebuilts per platform (scripts/download-lldb.sh) and run tests.
 # Also runs Gradle assemble in parallel.
 
 name: CI
@@ -12,7 +11,7 @@ on:
   workflow_dispatch:
 
 env:
-  LLVM_TAG: llvmorg-18.1.8
+  LLVM_VERSION: "21.1.8"
 
 jobs:
   assemble:
@@ -50,40 +49,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache LLDB build
-        id: cache
-        uses: actions/cache@v4
-        with:
-          path: lldb-build
-          key: lldb-${{ matrix.os }}-${{ matrix.platform_id }}-${{ env.LLVM_TAG }}
-
-      # One of the two steps below runs per job; the other is skipped (see if: conditions).
-      - name: Build LLDB (Unix)
-        if: matrix.os != 'windows-latest'
+      - name: Download LLDB prebuilts
         env:
           PLATFORM_ID: ${{ matrix.platform_id }}
-          LLVM_TAG: ${{ env.LLVM_TAG }}
-        run: ./scripts/build-lldb.sh
-
-      - name: Build LLDB (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        env:
-          PLATFORM_ID: ${{ matrix.platform_id }}
-          LLVM_TAG: ${{ env.LLVM_TAG }}
-        run: |
-          # Load Visual Studio environment so CMake and Ninja use MSVC (cl.exe).
-          # Without this, a different compiler may be picked and the LLVM build can fail.
-          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
-          cmd /c "`"$vcvars`" && set" | ForEach-Object { if ($_ -match "^(.*?)=(.*)$") { [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process") } }
-          ./scripts/build-lldb.ps1
+          LLVM_VERSION: ${{ env.LLVM_VERSION }}
+        run: ./scripts/download-lldb.sh
 
       - name: Verify prebuilts layout
         run: |
           PREBUILTS="${{ github.workspace }}/prebuilts/lldb/${{ matrix.platform_id }}"
           echo "Contents of $PREBUILTS/bin:"
-          ls -la "$PREBUILTS/bin" 2>/dev/null || dir "$PREBUILTS\bin" 2>nul
+          ls -la "$PREBUILTS/bin" 2>/dev/null || dir "$PREBUILTS\\bin" 2>nul
           test -f "$PREBUILTS/bin/lldb-dap" || test -f "$PREBUILTS/bin/lldb-dap.exe" || exit 1
           test -f "$PREBUILTS/bin/lldb-server" || test -f "$PREBUILTS/bin/lldb-server.exe" || exit 1
           echo "lldb-dap and lldb-server present in prebuilts."

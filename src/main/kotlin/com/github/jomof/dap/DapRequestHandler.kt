@@ -1,47 +1,46 @@
 package com.github.jomof.dap
 
 /**
- * Handles DAP JSON-RPC request bodies and returns response bodies.
- * Stateless; safe to reuse across requests.
+ * Handles DAP request bodies (envelope: type, seq, command, arguments) and returns
+ * DAP response bodies (type, request_seq, command, success, body/message). Stateless.
  */
 object DapRequestHandler {
-    private val METHOD_REGEX = """"method"\s*:\s*"([^"]+)"""".toRegex()
-    private val ID_REGEX = """"id"\s*:\s*(\d+)""".toRegex()
+    private val COMMAND_REGEX = """"command"\s*:\s*"([^"]+)"""".toRegex()
+    private val SEQ_REGEX = """"seq"\s*:\s*(\d+)""".toRegex()
 
     /**
-     * Test-only: method that throws so the server's catch block can be exercised.
-     * Do not use in production configs.
+     * Test-only: command that throws so the server's catch block can be exercised.
      */
     const val METHOD_TRIGGER_ERROR = "_triggerError"
 
+    internal const val INTERNAL_ERROR_MESSAGE = "triggered internal error"
+
     /**
-     * Parses [requestBody] (JSON-RPC request), dispatches by method, and returns the JSON-RPC response body.
+     * Parses [requestBody] (DAP request), dispatches by command, returns DAP response body.
      */
     fun handle(requestBody: String): String {
-        val method = METHOD_REGEX.find(requestBody)?.groupValues?.get(1)
-        val id = ID_REGEX.find(requestBody)?.groupValues?.get(1)?.toIntOrNull()
-        return when (method) {
-            "initialize" -> buildInitializeResponse(id)
+        val command = COMMAND_REGEX.find(requestBody)?.groupValues?.get(1)
+        val requestSeq = SEQ_REGEX.find(requestBody)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        return when (command) {
+            "initialize" -> buildDapResponse(requestSeq, "initialize", body = """{"capabilities":{}}""")
             METHOD_TRIGGER_ERROR -> throw RuntimeException(INTERNAL_ERROR_MESSAGE)
-            else -> buildErrorResponse(id, -32601, "Method not found: $method")
+            else -> buildDapErrorResponse(requestSeq, command ?: "unknown", "Method not found: $command")
         }
     }
 
-    internal const val INTERNAL_ERROR_MESSAGE = "triggered internal error"
-
-    private fun buildInitializeResponse(id: Int?): String {
-        val resultBody = """{"capabilities":{}}"""
-        return """{"jsonrpc":"2.0","id":${id ?: "null"},"result":$resultBody}"""
+    private fun buildDapResponse(requestSeq: Int, command: String, body: String): String {
+        return """{"type":"response","request_seq":$requestSeq,"seq":0,"command":"$command","success":true,"body":$body}"""
     }
 
-    internal fun buildErrorResponse(id: Int?, code: Int, message: String): String {
+    private fun buildDapErrorResponse(requestSeq: Int, command: String, message: String): String {
         val escaped = message.replace("\\", "\\\\").replace("\"", "\\\"")
-        return """{"jsonrpc":"2.0","id":${id ?: "null"},"error":{"code":$code,"message":"$escaped"}}"""
+        return """{"type":"response","request_seq":$requestSeq,"seq":0,"command":"$command","success":false,"message":"$escaped"}"""
     }
 
-    /** Builds a JSON-RPC error response for internal failures; extracts request id from [requestBody] if possible. */
+    /** DAP-format error response for internal failures; extracts request_seq from [requestBody]. */
     fun buildInternalErrorResponse(requestBody: String, message: String): String {
-        val id = ID_REGEX.find(requestBody)?.groupValues?.get(1)?.toIntOrNull()
-        return buildErrorResponse(id, -32603, message)
+        val requestSeq = SEQ_REGEX.find(requestBody)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val command = COMMAND_REGEX.find(requestBody)?.groupValues?.get(1) ?: "unknown"
+        return buildDapErrorResponse(requestSeq, command, message)
     }
 }

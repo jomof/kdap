@@ -64,4 +64,29 @@ class CliTest {
         val config = Cli.parse(arrayOf("--port", "42", "other", "ignored"))
         assertEquals(Transport.TcpListen(42), config?.transport)
     }
+
+    @Test
+    fun `--lldb-dap sets path`() {
+        val config = Cli.parse(arrayOf("--lldb-dap", "/usr/bin/lldb-dap"))
+        assertEquals(Transport.Stdio, config?.transport)
+        assertEquals("/usr/bin/lldb-dap", config?.lldbDapPath)
+    }
+
+    @Test
+    fun `--lldb-dap with missing value returns null`() {
+        assertNull(Cli.parse(arrayOf("--lldb-dap")))
+    }
+
+    @Test
+    fun `--lldb-dap combines with --port`() {
+        val config = Cli.parse(arrayOf("--port", "8080", "--lldb-dap", "/path/to/lldb-dap"))
+        assertEquals(Transport.TcpListen(8080), config?.transport)
+        assertEquals("/path/to/lldb-dap", config?.lldbDapPath)
+    }
+
+    @Test
+    fun `no --lldb-dap leaves path null`() {
+        val config = Cli.parse(emptyArray())
+        assertNull(config?.lldbDapPath)
+    }
 }

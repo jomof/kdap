@@ -2,7 +2,6 @@ package com.github.jomof
 
 import org.json.JSONObject
 import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.EnumSource
 
@@ -55,13 +54,17 @@ class DapLldbVersionTest {
         }
     """.trimIndent()
 
+    /**
+     * Evaluate response body from KDAP (_command context, forwarded to lldb-dap as repl).
+     *
+     * KDAP is a transparent proxy: it rewrites `_command` to `repl` and forwards to
+     * lldb-dap, so the response structure is identical to lldb-dap's.
+     */
+    private val expectedOurServerEvaluateBodyBaseline get() = expectedLldbDapEvaluateBodyBaseline
+
     @ParameterizedTest(name = "{0}")
     @EnumSource(ConnectionMode::class)
     fun `evaluate version command returns lldb version string`(mode: ConnectionMode) {
-        assumeTrue(mode.serverKind.supportsEvaluate) {
-            "${mode.serverKind} does not yet support evaluate"
-        }
-
         mode.connect().use { ctx ->
             // 1. Initialize the DAP session (adapter loads liblldb during startup)
             DapTestUtils.sendInitializeRequest(ctx.outputStream)
@@ -69,7 +72,7 @@ class DapLldbVersionTest {
             DapTestUtils.assertValidInitializeResponse(initResponse)
 
             // 2. Run "version" through the LLDB command interpreter (no launch needed).
-            mode.serverKind.sendEvaluateRequest(ctx.outputStream, seq = 2, expression = "version")
+            mode.serverKind.testServer.sendEvaluateRequest(ctx.outputStream, seq = 2, expression = "version")
             val evalResponse = DapTestUtils.readResponseForRequestSeq(ctx.inputStream, requestSeq = 2)
 
             // 3. The response must contain the LLDB version string, proving liblldb is alive
@@ -87,9 +90,9 @@ class DapLldbVersionTest {
             //    differences between server types. "result" is shown in the baseline for
             //    documentation but excluded from strict comparison (version string is dynamic).
             val bodyBaseline = when (mode.serverKind) {
+                ServerKind.OUR_SERVER -> expectedOurServerEvaluateBodyBaseline
                 ServerKind.LLDB_DAP -> expectedLldbDapEvaluateBodyBaseline
                 ServerKind.CODELDB -> expectedCodeLldbEvaluateBodyBaseline
-                ServerKind.OUR_SERVER -> error("unreachable")
             }
             val diff = DapTestUtils.compareJsonStrict(body, bodyBaseline, excludeKeys = setOf("result"))
             assertTrue(diff == null) {

@@ -1,6 +1,6 @@
 package com.github.jomof
 
-import com.github.jomof.dap.DapRequestHandler
+import com.github.jomof.dap.KdapInterceptor
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -19,7 +19,7 @@ object DapTestUtils {
 
     /** Sends a request that causes our server to hit its catch block (internal error response). */
     fun sendTriggerErrorRequest(output: OutputStream) {
-        sendRequest(output, """{"type":"request","seq":42,"command":"${DapRequestHandler.METHOD_TRIGGER_ERROR}","arguments":{}}""")
+        sendRequest(output, """{"type":"request","seq":42,"command":"${KdapInterceptor.METHOD_TRIGGER_ERROR}","arguments":{}}""")
     }
 
     /** Unknown command (lldb-dap returns success: false; our server returns method not found). */
@@ -246,7 +246,7 @@ object DapTestUtils {
     }
 
     /** DAP error response: success false, message (internal error or method not found). */
-    fun assertInternalErrorResponse(responseBody: String, expectedMessage: String = DapRequestHandler.INTERNAL_ERROR_MESSAGE) {
+    fun assertInternalErrorResponse(responseBody: String, expectedMessage: String = KdapInterceptor.INTERNAL_ERROR_MESSAGE) {
         org.junit.jupiter.api.Assertions.assertTrue(
             responseBody.contains("\"success\":false"),
             "Response should be error: $responseBody"

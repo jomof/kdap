@@ -1,6 +1,5 @@
 package com.github.jomof
 
-import com.github.jomof.dap.DapServer
 import com.github.jomof.dap.LldbDapProcess
 import java.io.InputStream
 import java.io.OutputStream
@@ -49,51 +48,48 @@ private fun runPortDiagnostics(port: Int, lldbDap: LldbDapProcess): String {
  */
 interface DapTestServer {
     /**
-     * The `evaluate` context used for running LLDB commands on this server,
-     * or `null` if the server does not support evaluate.
-     *
-     * - CodeLLDB: `"_command"` (custom extension that returns output in the response body).
-     * - lldb-dap: `"repl"` (standard DAP; lldb-dap runs LLDB commands in repl context).
-     * - KDAP: `null` (not yet implemented).
+     * Sends a DAP `evaluate` request to run [expression] as an LLDB command.
+     * Each server kind sends the appropriate context internally — callers
+     * never need to think about it.
      */
-    val evaluateCommandContext: String?
-
-    /** Whether this server supports the `evaluate` DAP request. */
-    val supportsEvaluate: Boolean get() = evaluateCommandContext != null
-
-    /**
-     * Sends a DAP `evaluate` request to run [expression] as an LLDB command,
-     * using the appropriate context for this server.
-     *
-     * @throws IllegalStateException if this server does not support evaluate.
-     */
-    fun sendEvaluateRequest(output: OutputStream, seq: Int, expression: String) {
-        val context = evaluateCommandContext
-            ?: error("$this does not support the evaluate command")
-        DapTestUtils.sendEvaluateRequest(output, seq, expression, context)
-    }
-
+    fun sendEvaluateRequest(output: OutputStream, seq: Int, expression: String)
 }
 
 /**
- * Which server the connection talks to. Implements [DapTestServer] so tests
- * get per-server behavior without `when` blocks.
+ * Shared [DapTestServer] for CodeLLDB-compatible servers (KDAP and CodeLLDB).
+ * Both [ServerKind.OUR_SERVER] and [ServerKind.CODELDB] reference this same
+ * instance, so they cannot drift apart. When a new method is added to
+ * [DapTestServer], the compiler forces it to be implemented here — once —
+ * and both server kinds get it automatically.
  */
-enum class ServerKind : DapTestServer {
-    /** Our KDAP server (MainKt). */
-    OUR_SERVER {
-        override val evaluateCommandContext: String? = null
-    },
+private val codelldbCompatibleTestServer = object : DapTestServer {
+    override fun sendEvaluateRequest(output: OutputStream, seq: Int, expression: String) =
+        DapTestUtils.sendEvaluateRequest(output, seq, expression, "_command")
+}
 
-    /** lldb-dap from LLVM prebuilts. */
-    LLDB_DAP {
-        override val evaluateCommandContext = "repl"
-    },
+/** [DapTestServer] for raw lldb-dap (no KDAP or CodeLLDB in front). */
+private val lldbDapTestServer = object : DapTestServer {
+    override fun sendEvaluateRequest(output: OutputStream, seq: Int, expression: String) =
+        DapTestUtils.sendEvaluateRequest(output, seq, expression, "repl")
+}
+
+/**
+ * Which server the connection talks to. Each kind carries a [testServer] that
+ * provides the correct request-sending behavior for that server type.
+ *
+ * [OUR_SERVER] and [CODELDB] share the **same** [DapTestServer] instance
+ * ([codelldbCompatibleTestServer]) so they are identical by construction and
+ * can never independently evolve.
+ */
+enum class ServerKind(val testServer: DapTestServer) {
+    /** Our KDAP server — always a decorator in front of lldb-dap. CodeLLDB-compatible. */
+    OUR_SERVER(codelldbCompatibleTestServer),
+
+    /** lldb-dap from LLVM prebuilts (direct, no KDAP in front). Standard DAP. */
+    LLDB_DAP(lldbDapTestServer),
 
     /** CodeLLDB adapter (from codelldb-vsix or KDAP_CODELDB_EXTENSION). */
-    CODELDB {
-        override val evaluateCommandContext = "_command"
-    }
+    CODELDB(codelldbCompatibleTestServer),
 }
 
 /**
@@ -102,58 +98,68 @@ enum class ServerKind : DapTestServer {
  * [serverKind] indicates whether this mode talks to our server or lldb-dap (for test branching).
  */
 enum class ConnectionMode(val serverKind: ServerKind) {
+    // ── KDAP modes (mirrors CodeLLDB modes below) ────────────────────────
+    /** Connects to KDAP adapter via stdio (no transport args). */
     STDIO(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
-            val process = DapProcessHarness.startProcess()
+            val process = KdapHarness.startAdapter()
             return object : ConnectionContext {
                 override val inputStream: InputStream = process.inputStream
                 override val outputStream: OutputStream = process.outputStream
-                override fun close() = DapProcessHarness.stopProcess(process)
+                override fun close() = KdapHarness.stopProcess(process)
             }
         }
     },
+    /** Connects to KDAP adapter via TCP (--port N). */
     TCP_LISTEN(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
-            val freePort = ServerSocket(0).use { it.localPort }
-            val process = DapProcessHarness.startProcess("--port", freePort.toString())
-            val socket = DapProcessHarness.connectToPort(freePort).apply { soTimeout = 10_000 }
+            val (process, port) = KdapHarness.startAdapterTcp()
+            val socket = TcpTestUtils.connectToPort(port).apply { soTimeout = 10_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = socket.getInputStream()
                 override val outputStream: OutputStream = socket.getOutputStream()
                 override fun close() {
                     socket.close()
-                    DapProcessHarness.stopProcess(process)
+                    KdapHarness.stopProcess(process)
                 }
             }
         }
     },
+    /** Connects to KDAP adapter via reverse TCP (--connect N). */
     TCP_CONNECT(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
             val server = ServerSocket(0)
             val port = server.localPort
-            val process = DapProcessHarness.startProcess("--connect", port.toString())
+            val process = KdapHarness.startAdapter("--connect", port.toString())
             val socket = server.accept().apply { soTimeout = 10_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = socket.getInputStream()
                 override val outputStream: OutputStream = socket.getOutputStream()
                 override fun close() {
                     socket.close()
-                    DapProcessHarness.stopProcess(process)
+                    KdapHarness.stopProcess(process)
                     server.close()
                 }
             }
         }
     },
+    /** Runs KDAP in-process by calling [main] directly with redirected System.in/out. */
     IN_PROCESS(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
+            val lldbDapPath = LldbDapHarness.resolveLldbDapPath()
+                ?: error("lldb-dap not found (run scripts/download-lldb.sh or set KDAP_LLDB_ROOT)")
+            val originalIn = System.`in`
+            val originalOut = System.out
             val serverInput = java.io.PipedInputStream()
             val testToServer = java.io.PipedOutputStream(serverInput)
             val serverToClient = java.io.PipedOutputStream()
             val testFromServer = java.io.PipedInputStream(serverToClient)
+            System.setIn(serverInput)
+            System.setOut(java.io.PrintStream(serverToClient, /* autoFlush = */ true))
             val serverReady = CountDownLatch(1)
             val serverThread = thread {
                 serverReady.countDown()
-                DapServer.run(serverInput, serverToClient)
+                main(arrayOf("--lldb-dap", lldbDapPath.absolutePath))
             }
             serverReady.await()
             return object : ConnectionContext {
@@ -161,11 +167,15 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                 override val outputStream: OutputStream = testToServer
                 override fun close() {
                     testToServer.close()
-                    serverThread.join(2000)
+                    serverThread.join(5000)
+                    System.setIn(originalIn)
+                    System.setOut(originalOut)
                 }
             }
         }
     },
+
+    // ── lldb-dap direct (reference implementation, no KDAP in front) ─────
     /** Connects to lldb-dap via TCP (-p port). Stdout and stderr captured on failure (keep for CI diagnostics). */
     TCP_LLDB(ServerKind.LLDB_DAP) {
         override fun connect(): ConnectionContext {
@@ -174,8 +184,6 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             val (lldbDap, port) = LldbDapHarness.startTcp()
             val stdoutBuf = StringBuilder()
             val stderrBuf = StringBuilder()
-            // In TCP mode lldb-dap's stdout/stderr are not DAP traffic — capture
-            // them for diagnostics in case the connection fails to come up.
             thread(isDaemon = true) {
                 lldbDap.inputStream.bufferedReader(Charsets.UTF_8).use { r ->
                     r.lineSequence().forEach { stdoutBuf.appendLine(it) }
@@ -187,7 +195,11 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                 }
             }
             return try {
-                val socket = DapProcessHarness.connectToPort(port, 120_000).apply { soTimeout = 15_000 }
+                val socket = TcpTestUtils.connectToPort(port, 120_000).apply { soTimeout = 15_000 }
+                // lldb-dap's TCP mode has a race: the OS accept-backlog accepts our
+                // connection before the application is ready for DAP traffic. A brief
+                // pause lets lldb-dap finish initializing after accept().
+                Thread.sleep(200)
                 object : ConnectionContext {
                     override val inputStream: InputStream = socket.getInputStream()
                     override val outputStream: OutputStream = socket.getOutputStream()
@@ -213,6 +225,8 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             }
         }
     },
+
+    // ── CodeLLDB modes (KDAP modes above mirror this structure) ──────────
     /** Connects to CodeLLDB adapter via stdio (adapter with no args). */
     STDIO_CODELDB(ServerKind.CODELDB) {
         override fun connect(): ConnectionContext {
@@ -232,7 +246,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             if (!CodeLldbHarness.isAvailable())
                 throw IllegalStateException("CodeLLDB adapter not available (run scripts/download-codelldb-vsix.sh or set KDAP_CODELDB_EXTENSION)")
             val (process, port) = CodeLldbHarness.startAdapterTcp()
-            val socket = DapProcessHarness.connectToPort(port, 30_000).apply { soTimeout = 15_000 }
+            val socket = TcpTestUtils.connectToPort(port, 30_000).apply { soTimeout = 15_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = socket.getInputStream()
                 override val outputStream: OutputStream = socket.getOutputStream()

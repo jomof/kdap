@@ -15,10 +15,12 @@ import org.junit.jupiter.params.provider.MethodSource
  */
 class DapInitializeTest {
 
-    /** Current capabilities from our KDAP server — empty while we build out features. */
-    private val expectedOurCapabilitiesBaseline = """
-        {}
-    """.trimIndent()
+    /**
+     * Current capabilities from our KDAP server. KDAP is a transparent proxy in front
+     * of lldb-dap, so capabilities are identical to lldb-dap's. If KDAP ever augments
+     * capabilities (e.g. adding CodeLLDB-specific ones), this baseline should diverge.
+     */
+    private val expectedOurCapabilitiesBaseline get() = expectedLldbDapInitializeCapabilitiesBaseline
 
     /** Current capabilities from lldb-dap (LLVM 21.1.8 prebuilts). */
     private val expectedLldbDapInitializeCapabilitiesBaseline = """

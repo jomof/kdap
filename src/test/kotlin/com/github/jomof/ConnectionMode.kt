@@ -88,7 +88,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             }
         }
     },
-    /** Connects to lldb-dap via TCP (-p port). Captures stderr so CI logs show why it failed if port never becomes reachable. */
+    /** Connects to lldb-dap via TCP (-p port). Stderr is captured and included on failure (keep this for CI diagnostics). */
     TCP_LLDB(ServerKind.LLDB_DAP) {
         override fun connect(): ConnectionContext {
             if (!LldbDapHarness.isAvailable())

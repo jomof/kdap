@@ -34,7 +34,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform_id: linux-x64
           - os: macos-latest
             platform_id: darwin-arm64
@@ -63,6 +63,12 @@ jobs:
           test -f "$PREBUILTS/bin/lldb-dap" || test -f "$PREBUILTS/bin/lldb-dap.exe" || exit 1
           test -f "$PREBUILTS/bin/lldb-server" || test -f "$PREBUILTS/bin/lldb-server.exe" || exit 1
           echo "lldb-dap and lldb-server present in prebuilts."
+
+      - name: Install lldb-dap runtime deps (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libxml2 libncurses6 libpython3.10
 
       - name: Set up JDK
         uses: actions/setup-java@v4

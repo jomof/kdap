@@ -34,12 +34,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
-            platform_id: linux-x64
+          # - os: ubuntu-22.04
+          #   platform_id: linux-x64
           - os: macos-latest
             platform_id: darwin-arm64
-          - os: windows-latest
-            platform_id: win32-x64
+          # - os: windows-latest
+          #   platform_id: win32-x64
 
     runs-on: ${{ matrix.os }}
     defaults:
@@ -84,12 +84,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
-            platform_id: linux-x64
+          # - os: ubuntu-22.04
+          #   platform_id: linux-x64
           - os: macos-latest
             platform_id: darwin-arm64
-          - os: windows-latest
-            platform_id: win32-x64
+          # - os: windows-latest
+          #   platform_id: win32-x64
 
     runs-on: ${{ matrix.os }}
     defaults:

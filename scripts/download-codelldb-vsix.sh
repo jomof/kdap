@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Download the latest CodeLLDB VSIX for current Mac (darwin-arm64 or darwin-x64)
-# and extract it so the DAP server (adapter + bin) is available locally.
+# Download the latest CodeLLDB VSIX for the current platform and extract it
+# so the DAP server (adapter + bin) is available locally.
 #
 # Usage: from project root, ./scripts/download-codelldb-vsix.sh
 # Output: ./codelldb-vsix/ with extension/ (adapter, bin, etc.)
@@ -13,15 +13,35 @@ OUT_DIR="$PROJECT_ROOT/codelldb-vsix"
 
 cd "$PROJECT_ROOT"
 
+OS=$(uname -s)
 ARCH=$(uname -m)
-if [[ "$ARCH" == "arm64" ]]; then
-  VSIX_NAME="codelldb-darwin-arm64.vsix"
-elif [[ "$ARCH" == "x86_64" ]]; then
-  VSIX_NAME="codelldb-darwin-x64.vsix"
-else
-  echo "Unsupported Mac arch: $ARCH" >&2
-  exit 1
-fi
+
+case "$OS" in
+  Darwin)
+    if [[ "$ARCH" == "arm64" ]]; then
+      VSIX_NAME="codelldb-darwin-arm64.vsix"
+    elif [[ "$ARCH" == "x86_64" ]]; then
+      VSIX_NAME="codelldb-darwin-x64.vsix"
+    else
+      echo "Unsupported macOS arch: $ARCH" >&2
+      exit 1
+    fi
+    ;;
+  Linux)
+    if [[ "$ARCH" == "x86_64" ]]; then
+      VSIX_NAME="codelldb-linux-x64.vsix"
+    elif [[ "$ARCH" == "aarch64" ]]; then
+      VSIX_NAME="codelldb-linux-arm64.vsix"
+    else
+      echo "Unsupported Linux arch: $ARCH" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Unsupported OS: $OS" >&2
+    exit 1
+    ;;
+esac
 
 # GitHub API can 403 without User-Agent; GITHUB_TOKEN (e.g. in CI) raises rate limits.
 CURL_OPTS=(-sSfL -A "kdap-download-codelldb/1.0")

@@ -34,8 +34,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # - os: ubuntu-22.04
-          #   platform_id: linux-x64
+          - os: ubuntu-22.04
+            platform_id: linux-x64
           - os: macos-latest
             platform_id: darwin-arm64
           # - os: windows-latest
@@ -68,14 +68,12 @@ jobs:
           sudo apt-get install -y libxml2 libncurses6 libpython3.10
 
       - name: Cache CodeLLDB VSIX
-        if: matrix.os == 'macos-latest'
         uses: actions/cache@v4
         with:
           path: codelldb-vsix
-          key: codelldb-vsix-${{ runner.arch }}
+          key: codelldb-vsix-${{ matrix.os }}-${{ runner.arch }}
 
-      - name: Download CodeLLDB VSIX (macOS)
-        if: matrix.os == 'macos-latest'
+      - name: Download CodeLLDB VSIX
         run: ./scripts/download-codelldb-vsix.sh
 
       - name: Set up JDK

@@ -1,5 +1,4 @@
-# Download LLDB prebuilts per platform (scripts/download-lldb.sh) and run tests.
-# Also runs Gradle assemble in parallel.
+# Download LLDB + CodeLLDB prebuilts and compile Kotlin in parallel, then run tests.
 
 name: CI
 
@@ -14,21 +13,6 @@ env:
   LLVM_VERSION: "21.1.8"
 
 jobs:
-  assemble:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up JDK
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 21
-
-      - name: Assemble
-        run: ./gradlew assemble
-
   build:
     strategy:
       fail-fast: false
@@ -49,23 +33,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
       - name: Cache LLDB prebuilts
         uses: actions/cache@v4
         with:
           path: prebuilts/lldb/${{ matrix.platform_id }}
           key: lldb-${{ matrix.platform_id }}-${{ env.LLVM_VERSION }}
-
-      - name: Download LLDB prebuilts
-        env:
-          PLATFORM_ID: ${{ matrix.platform_id }}
-          LLVM_VERSION: ${{ env.LLVM_VERSION }}
-        run: ./scripts/download-lldb.sh
-
-      - name: Install lldb-dap runtime deps (Linux)
-        if: matrix.os == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y libxml2 libncurses6 libpython3.10
 
       - name: Cache CodeLLDB VSIX
         uses: actions/cache@v4
@@ -73,14 +52,24 @@ jobs:
           path: codelldb-vsix
           key: codelldb-vsix-${{ matrix.os }}-${{ runner.arch }}
 
-      - name: Download CodeLLDB VSIX
-        run: ./scripts/download-codelldb-vsix.sh
+      - name: Download prebuilts and compile in parallel
+        env:
+          PLATFORM_ID: ${{ matrix.platform_id }}
+          LLVM_VERSION: ${{ env.LLVM_VERSION }}
+        run: |
+          # Start Gradle compile in background so it warms up while downloads run.
+          ./gradlew compileTestKotlin &
+          GRADLE_PID=$!
+          ./scripts/download-lldb.sh &
+          ./scripts/download-codelldb-vsix.sh &
+          wait $GRADLE_PID
+          wait
 
-      - name: Set up JDK
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 21
+      - name: Install lldb-dap runtime deps (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libxml2 libncurses6 libpython3.10
 
       - name: Run tests
         run: ./gradlew test

@@ -80,46 +80,83 @@ jobs:
         run: ./gradlew test
 
   lldb-dap-smoke:
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform_id: linux-x64
+          - os: macos-latest
+            platform_id: darwin-arm64
+          - os: windows-latest
+            platform_id: win32-x64
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Download LLDB prebuilts
         env:
-          PLATFORM_ID: linux-x64
+          PLATFORM_ID: ${{ matrix.platform_id }}
           LLVM_VERSION: ${{ env.LLVM_VERSION }}
         run: ./scripts/download-lldb.sh
 
-      - name: Install lldb-dap runtime deps
+      - name: Install lldb-dap runtime deps (Linux)
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y libxml2 libncurses6 libpython3.10
 
       - name: lldb-dap --help
         run: |
-          export LD_LIBRARY_PATH="${{ github.workspace }}/prebuilts/lldb/linux-x64/lib"
-          export PYTHONPATH="${{ github.workspace }}/prebuilts/lldb/linux-x64/local/lib/python3.10/dist-packages"
-          "${{ github.workspace }}/prebuilts/lldb/linux-x64/bin/lldb-dap" --help
+          PREBUILTS="${{ github.workspace }}/prebuilts/lldb/${{ matrix.platform_id }}"
+          if [[ "${{ matrix.platform_id }}" == win32-* ]]; then
+            EXE="$PREBUILTS/bin/lldb-dap.exe"
+          else
+            EXE="$PREBUILTS/bin/lldb-dap"
+          fi
+          if [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+            export LD_LIBRARY_PATH="$PREBUILTS/lib"
+            export PYTHONPATH="$PREBUILTS/local/lib/python3.10/dist-packages"
+          fi
+          "$EXE" --help
 
       - name: lldb-dap -p (prototypical TCP listen)
         run: |
-          export LD_LIBRARY_PATH="${{ github.workspace }}/prebuilts/lldb/linux-x64/lib"
-          export PYTHONPATH="${{ github.workspace }}/prebuilts/lldb/linux-x64/local/lib/python3.10/dist-packages"
+          PREBUILTS="${{ github.workspace }}/prebuilts/lldb/${{ matrix.platform_id }}"
+          if [[ "${{ matrix.platform_id }}" == win32-* ]]; then
+            EXE="$PREBUILTS/bin/lldb-dap.exe"
+          else
+            EXE="$PREBUILTS/bin/lldb-dap"
+          fi
+          if [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+            export LD_LIBRARY_PATH="$PREBUILTS/lib"
+            export PYTHONPATH="$PREBUILTS/local/lib/python3.10/dist-packages"
+          fi
           PORT=19999
-          BIN="${{ github.workspace }}/prebuilts/lldb/linux-x64/bin/lldb-dap"
           echo "Starting lldb-dap -p $PORT in background (will run up to 15s)..."
-          $BIN -p "$PORT" 2>&1 &
+          $EXE -p "$PORT" 2>&1 &
           PID=$!
           for i in $(seq 1 15); do
-            if ss -tlnp 2>/dev/null | grep -q ":$PORT "; then
-              echo "Port $PORT became reachable after ${i}s (pid $PID)."
-              break
+            if [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+              ss -tlnp 2>/dev/null | grep -q ":$PORT " && break
+            elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+              lsof -i ":$PORT" -sTCP:LISTEN 2>/dev/null | grep -q LISTEN && break
+            else
+              netstat -an 2>/dev/null | grep -q " $PORT .*LISTENING" && break
             fi
             sleep 1
           done
-          if ! ss -tlnp 2>/dev/null | grep -q ":$PORT "; then
-            echo "Port $PORT never appeared in ss -tlnp after 15s."
+          if [[ "${{ matrix.os }}" == "ubuntu-22.04" ]]; then
+            ss -tlnp 2>/dev/null | grep -q ":$PORT " && echo "Port $PORT became reachable after ${i}s." || echo "Port $PORT never appeared in ss -tlnp after 15s."
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            lsof -i ":$PORT" -sTCP:LISTEN 2>/dev/null | grep -q LISTEN && echo "Port $PORT became reachable after ${i}s." || echo "Port $PORT never appeared in lsof after 15s."
+          else
+            netstat -an 2>/dev/null | grep -q " $PORT .*LISTENING" && echo "Port $PORT became reachable after ${i}s." || echo "Port $PORT never appeared in netstat after 15s."
           fi
           kill $PID 2>/dev/null || true
           wait $PID 2>/dev/null || true

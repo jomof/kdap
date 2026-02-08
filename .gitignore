@@ -30,8 +30,6 @@ out/
 bin/
 !**/src/main/**/bin/
 !**/src/test/**/bin/
-!prebuilts/lldb/**/bin/
-!prebuilts/lldb/**/bin/**
 
 ### NetBeans ###
 /nbproject/private/

@@ -55,10 +55,13 @@ We **build LLDB (and thus lldb-dap and lldb-server) from source** using the offi
 
 ### 1.4 CI (GitHub Actions) (implemented)
 
-- **Workflow**: `.github/workflows/ci.yml` runs on push/PR to `main` and on workflow_dispatch. It invokes the same build as local: **`scripts/build-lldb.sh`** on Linux and macOS, **`scripts/build-lldb.ps1`** on Windows. No prebuilt downloads; the only source of binaries is our build.
-- **Caching**: The workflow caches the **build tree** (`lldb-build/`) with key `lldb-${{ matrix.os }}-${{ matrix.platform_id }}-${{ env.LLVM_TAG }}`. Restore at the start of the job; if missing, the script runs the full build and the cache is saved. This keeps CI fast after the first run per platform/version.
-- **Matrix**: `ubuntu-latest` (linux-x64), `macos-latest` (darwin-arm64), `windows-latest` (win32-x64). Each job sets `PLATFORM_ID` to the matrix value; the script writes into `prebuilts/lldb/<platform_id>/`. A “Verify prebuilts layout” step checks that `lldb-dap` and `lldb-server` are present there.
+- **Workflow**: `.github/workflows/ci.yml` runs on push/PR to `main` and on workflow_dispatch. Two jobs:
+  - **assemble**: Runs on `ubuntu-latest`; runs `./gradlew assemble` to verify the Kotlin project builds.
+  - **build**: Matrix job that (1) runs the same LLDB build as local—**`scripts/build-lldb.sh`** on Linux/macOS, **`scripts/build-lldb.ps1`** on Windows—(2) verifies the prebuilts layout, (3) runs `./gradlew test`. No prebuilt downloads; the only source of binaries is our build.
+- **Caching**: The build job caches the **build tree** (`lldb-build/`) with key `lldb-${{ matrix.os }}-${{ matrix.platform_id }}-${{ env.LLVM_TAG }}`. Restore at the start of the job; if missing, the script runs the full build and the cache is saved. This keeps CI fast after the first run per platform/version.
+- **Matrix**: `ubuntu-latest` (linux-x64), `macos-latest` (darwin-arm64), `windows-latest` (win32-x64). Each build job sets `PLATFORM_ID` to the matrix value; the script writes into `prebuilts/lldb/<platform_id>/`. A “Verify prebuilts layout” step checks that `lldb-dap` and `lldb-server` are present there.
 - **Reproducibility**: The workflow sets `LLVM_TAG=llvmorg-18.1.8` (same default as the scripts). Change the tag in the workflow and in the scripts when upgrading; document in README/DEV.md.
+- **Dependency updates**: `.github/dependabot.yml` configures weekly updates for the Gradle and GitHub Actions ecosystems.
 
 ### 1.5 Summary table
 
@@ -70,7 +73,7 @@ We **build LLDB (and thus lldb-dap and lldb-server) from source** using the offi
 | Build debris (gitignored) | `lldb-build/` (clone + build tree + install-staging) |
 | Runtime deps | lldb-dap’s own deps (e.g. liblldb); we only spawn the process |
 | Remote | lldb-server from the same source build (same repo, same tag) |
-| CI | `.github/workflows/ci.yml` runs the script per matrix job; caches `lldb-build/` by OS, platform_id, and LLVM_TAG |
+| CI | `.github/workflows/ci.yml`: assemble job (Gradle); build job runs script per matrix, caches `lldb-build/`, verifies prebuilts, runs Gradle test |
 | Versioning | Pinned tag `llvmorg-18.1.8` in scripts and workflow; update in both when upgrading |
 
 ---
@@ -306,11 +309,17 @@ Implementing all of the above is post-MVP; the list defines the target for “Co
 
 ## 6. Document status
 
-This is an initial design for iteration. Priorities:
+This is an initial design for iteration.
 
-1. **Dependencies and CI**: Lock down how we build LLDB from source, install into the multi-platform layout, and run CI (with build caching) so that the rest of the work is on solid ground.
-2. **Decorator pipeline**: Implement the request/response/event forwarding and passthrough so that “run lldb-dap behind KDAP” works end-to-end.
-3. **MVP features**: Launch (local), breakpoints, execution, stack/variables, basic evaluate; then remote launch/attach and path mapping.
-4. **Testability**: Test harness + C++ and Rust debuggees + optional remote test with lldb-server on localhost.
+**Implementation status**
+
+- **§1 Dependencies and CI**: Implemented. LLDB is built from source via `scripts/build-lldb.sh` (Unix) and `scripts/build-lldb.ps1` (Windows); output goes to `prebuilts/lldb/<platform-id>/`. CI (`.github/workflows/ci.yml`) runs Gradle assemble, a matrix LLDB build with caching, and Gradle test. Dependabot is configured for Gradle and GitHub Actions.
+- **§2–§5**: Design only; decorator pipeline and MVP features are not yet implemented.
+
+**Next priorities**
+
+1. **Decorator pipeline**: Implement the request/response/event forwarding and passthrough so that “run lldb-dap behind KDAP” works end-to-end.
+2. **MVP features**: Launch (local), breakpoints, execution, stack/variables, basic evaluate; then remote launch/attach and path mapping.
+3. **Testability**: Test harness + C++ and Rust debuggees + optional remote test with lldb-server on localhost.
 
 Sections 2.3 and 2.2 define the feature roadmap and the CodeLLDB parity list; we can tick them off as we implement.

@@ -1,0 +1,66 @@
+# Build LLDB from source per DESIGN.md §1.4. Uses scripts/build-lldb.sh (Unix) or
+# scripts/build-lldb.ps1 (Windows). Caches the build tree to speed up subsequent runs.
+
+name: Build LLDB
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  LLVM_TAG: llvmorg-18.1.8
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform_id: linux-x64
+          - os: macos-latest
+            platform_id: darwin-arm64
+          - os: windows-latest
+            platform_id: win32-x64
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache LLDB build
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: lldb-build
+          key: lldb-${{ matrix.os }}-${{ matrix.platform_id }}-${{ env.LLVM_TAG }}
+
+      - name: Build LLDB (Unix)
+        if: matrix.os != 'windows-latest'
+        env:
+          PLATFORM_ID: ${{ matrix.platform_id }}
+          LLVM_TAG: ${{ env.LLVM_TAG }}
+        run: ./scripts/build-lldb.sh
+
+      - name: Build LLDB (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          PLATFORM_ID: ${{ matrix.platform_id }}
+          LLVM_TAG: ${{ env.LLVM_TAG }}
+        run: ./scripts/build-lldb.ps1
+
+      - name: Verify prebuilts layout
+        run: |
+          PREBUILTS="${{ github.workspace }}/prebuilts/lldb/${{ matrix.platform_id }}"
+          echo "Contents of $PREBUILTS/bin:"
+          ls -la "$PREBUILTS/bin" 2>/dev/null || dir "$PREBUILTS\bin" 2>nul
+          test -f "$PREBUILTS/bin/lldb-dap" || test -f "$PREBUILTS/bin/lldb-dap.exe" || exit 1
+          test -f "$PREBUILTS/bin/lldb-server" || test -f "$PREBUILTS/bin/lldb-server.exe" || exit 1
+          echo "lldb-dap and lldb-server present in prebuilts."

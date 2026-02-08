@@ -1,16 +1,21 @@
 package com.github.jomof
 
-//TIP To <b>Run</b> code, press <shortcut actionId="Run"/> or
-// click the <icon src="AllIcons.Actions.Execute"/> icon in the gutter.
-fun main() {
-    val name = "Kotlin"
-    //TIP Press <shortcut actionId="ShowIntentionActions"/> with your caret at the highlighted text
-    // to see how IntelliJ IDEA suggests fixing it.
-    println("Hello, " + name + "!")
+import com.github.jomof.dap.Cli
+import com.github.jomof.dap.DapServer
 
-    for (i in 1..5) {
-        //TIP Press <shortcut actionId="Debug"/> to start debugging your code. We have set one <icon src="AllIcons.Debugger.Db_set_breakpoint"/> breakpoint
-        // for you, but you can always add more by pressing <shortcut actionId="ToggleLineBreakpoint"/>.
-        println("i = $i")
+/**
+ * Entry point for the DAP server. Supports stdio (default), TCP listen (--port N),
+ * and TCP connect (--connect N), matching CodeLLDB's command line.
+ */
+fun main(args: Array<String>) {
+    val config = Cli.parse(args)
+    if (config == null) {
+        System.err.println("Usage: [--port N] | [--connect N]")
+        System.err.println("  --port N    Listen on port N, accept one connection")
+        System.err.println("  --connect N Connect to 127.0.0.1:N")
+        System.err.println("  (no args)   Use stdio")
+        System.exit(1)
+    } else {
+        DapServer.run(config.transport)
     }
 }

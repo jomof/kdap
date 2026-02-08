@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Downloads the official LLVM release and extracts only the files needed for
-# lldb-dap + lldb-server: bin binaries and minimal libs (no full lib/ dump).
+# Downloads the official LLVM release and extracts the full archive into
+# prebuilts/lldb/<platform_id>/.
 # Skips if required files already present (unless --force). Use --platform to
 # download for another OS (e.g. on Mac: --platform linux-x64 or --platform win32-x64).
 #
@@ -112,48 +112,9 @@ if [[ ! -f "$DOWNLOAD_DIR/$ARCHIVE" ]]; then
   curl -fSL --connect-timeout 60 --max-time 600 -o "$DOWNLOAD_DIR/$ARCHIVE" "$URL"
 fi
 
-# --- List archive to get TOPLEVEL and select only the members we need (no full lib/ dump)
-echo "Listing archive (may take a minute for large tarballs) ..."
-TAR_LIST=$(mktemp)
-trap 'rm -f "$TAR_LIST" "$MEMBERS_FILE"' EXIT
-tar -tf "$DOWNLOAD_DIR/$ARCHIVE" > "$TAR_LIST"
-TOPLEVEL=$(head -1 "$TAR_LIST" | cut -d/ -f1)
-if [[ -z "$TOPLEVEL" ]]; then
-  echo "Could not determine tarball top-level directory" >&2
-  exit 1
-fi
-
-MEMBERS_FILE=$(mktemp)
-case "$PLATFORM_ID" in
-  darwin-*)
-    # Mac: exactly 4 files — bin/lldb-dap, bin/lldb-server, lib/liblldb*.dylib
-    grep -E "^$TOPLEVEL/(bin/(lldb-dap|lldb-server)\$|lib/liblldb.*\.dylib\$)" "$TAR_LIST" > "$MEMBERS_FILE" || true
-    ;;
-  linux-*)
-    # Linux: bin + minimal .so set + Python lldb module (local/lib/python3.10/dist-packages/lldb) for lldb-dap.
-    grep -E "^$TOPLEVEL/bin/(lldb-dap|lldb-server)\$" "$TAR_LIST" > "$MEMBERS_FILE"
-    grep -E "^$TOPLEVEL/lib/(.*/)?(liblldb|libLLVM|libclang\.so|libclang-cpp|libc\+\+|libc\+\+abi|libunwind|libRemarks|libLTO)\.so(\.[0-9]+)*\$" "$TAR_LIST" >> "$MEMBERS_FILE" || true
-    grep -E "^$TOPLEVEL/local/lib/python3[.]10/dist-packages/lldb" "$TAR_LIST" >> "$MEMBERS_FILE" || true
-    ;;
-  win32-*)
-    # Windows: bin exes + lib/*.dll only
-    grep -E "^$TOPLEVEL/(bin/(lldb-dap|lldb-server)\.exe\$|lib/.*\.dll\$)" "$TAR_LIST" > "$MEMBERS_FILE" || true
-    if [[ ! -s "$MEMBERS_FILE" ]]; then
-      grep -E "^$TOPLEVEL/bin/(lldb-dap|lldb-server)\.exe\$" "$TAR_LIST" > "$MEMBERS_FILE"
-      grep -E "^$TOPLEVEL/lib/.*\.dll\$" "$TAR_LIST" >> "$MEMBERS_FILE" || true
-    fi
-    ;;
-  *) echo "Unsupported platform: $PLATFORM_ID" >&2; exit 1 ;;
-esac
-
-if [[ ! -s "$MEMBERS_FILE" ]]; then
-  echo "No matching members found in archive. TOPLEVEL=$TOPLEVEL. First 20 entries:" >&2
-  head -20 "$TAR_LIST"
-  exit 1
-fi
-
-echo "Extracting $(wc -l < "$MEMBERS_FILE" | tr -d ' ') files to $TARGET ..."
-tar -xJf "$DOWNLOAD_DIR/$ARCHIVE" -C "$TARGET" --strip-components=1 -T "$MEMBERS_FILE"
+# --- Extract full archive (strip one path component so e.g. LLVM-21.1.8-Linux-X64/bin -> TARGET/bin)
+echo "Extracting to $TARGET ... (may take 1–2 min)"
+tar -xJf "$DOWNLOAD_DIR/$ARCHIVE" -C "$TARGET" --strip-components=1
 
 if [[ -x "$TARGET/bin/$EXE_NAME" ]] || [[ -f "$TARGET/bin/$EXE_NAME" ]]; then
   echo "Done. lldb-dap at: $TARGET/bin/$EXE_NAME"

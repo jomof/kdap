@@ -99,7 +99,9 @@ class LldbDapProcess private constructor(
                 "lldb-dap executable not found: $lldbDapPath"
             }
             val binDir = lldbDapPath.parentFile
+                ?: error("lldb-dap path has no parent directory: $lldbDapPath")
             val platformDir = binDir.parentFile
+                ?: error("lldb-dap bin directory has no parent: $binDir")
             val libDir = File(platformDir, "lib")
 
             val cmd = mutableListOf(lldbDapPath.absolutePath)
@@ -184,6 +186,10 @@ class LldbDapProcess private constructor(
          * Configures environment variables needed for lldb-dap to locate its
          * dependencies (liblldb, Python packages, etc.) based on the standard
          * LLVM directory layout.
+         *
+         * Throws [IllegalStateException] if the expected directory layout is
+         * broken — failing fast here instead of letting lldb-dap crash later
+         * with a cryptic "cannot load liblldb" message.
          */
         private fun configureEnvironment(
             env: MutableMap<String, String>,
@@ -193,29 +199,37 @@ class LldbDapProcess private constructor(
             // Prevent interactive prompts in terminal-unaware environments.
             if (!env.containsKey("TERM")) env["TERM"] = "dumb"
 
-            if (!libDir.isDirectory) return
-
             val os = System.getProperty("os.name").lowercase()
             when {
                 // Linux: set LD_LIBRARY_PATH so the dynamic linker finds liblldb.so.
                 // Also set PYTHONPATH if the prebuilts include Python packages.
                 // macOS: do NOT set DYLD_LIBRARY_PATH — the binary's rpath handles it.
                 "linux" in os -> {
+                    check(libDir.isDirectory) {
+                        "LLVM lib directory not found: $libDir — " +
+                            "the LLVM installation appears incomplete (run scripts/download-lldb.sh)"
+                    }
                     val libPath = libDir.absolutePath
                     env["LD_LIBRARY_PATH"] = env["LD_LIBRARY_PATH"]
                         ?.let { "$libPath:$it" }
                         ?: libPath
+                    // Python site-packages are optional — some LLVM builds exclude Python.
                     val pythonSite = File(platformDir, "local/lib/python3.10/dist-packages")
                     if (pythonSite.isDirectory) {
                         env["PYTHONPATH"] = pythonSite.absolutePath
                     }
                 }
                 // Windows: prepend bin/ to PATH so lldb-dap.exe finds liblldb.dll.
+                // DLLs live in bin/ alongside the executable, not in lib/.
                 "win" in os -> {
-                    val binPath = File(platformDir, "bin").absolutePath
+                    val binDir = File(platformDir, "bin")
+                    check(binDir.isDirectory) {
+                        "LLVM bin directory not found: $binDir — " +
+                            "the LLVM installation appears incomplete (run scripts/download-lldb.sh)"
+                    }
                     env["PATH"] = env["PATH"]
-                        ?.let { "$binPath;$it" }
-                        ?: binPath
+                        ?.let { "${binDir.absolutePath};$it" }
+                        ?: binDir.absolutePath
                 }
             }
         }

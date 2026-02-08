@@ -103,10 +103,23 @@ enum class ConnectionMode(val serverKind: ServerKind) {
     STDIO(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
             val process = KdapHarness.startAdapter()
+            val stderrBuf = StringBuilder()
+            val stderrThread = kotlin.concurrent.thread(isDaemon = true) {
+                process.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
+                    r.lineSequence().forEach { stderrBuf.appendLine(it) }
+                }
+            }
             return object : ConnectionContext {
                 override val inputStream: InputStream = process.inputStream
                 override val outputStream: OutputStream = process.outputStream
-                override fun close() = KdapHarness.stopProcess(process)
+                override val stderr: String get() = stderrBuf.toString()
+                override fun close() {
+                    KdapHarness.stopProcess(process)
+                    val err = stderrBuf.toString().trim()
+                    if (err.isNotEmpty()) {
+                        System.err.println("[KDAP STDIO stderr]: $err")
+                    }
+                }
             }
         }
     },
@@ -114,6 +127,12 @@ enum class ConnectionMode(val serverKind: ServerKind) {
     TCP_LISTEN(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
             val (process, port) = KdapHarness.startAdapterTcp()
+            val stderrBuf = StringBuilder()
+            kotlin.concurrent.thread(isDaemon = true) {
+                process.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
+                    r.lineSequence().forEach { stderrBuf.appendLine(it) }
+                }
+            }
             val socket = TcpTestUtils.connectToPort(port).apply { soTimeout = 10_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = socket.getInputStream()
@@ -121,6 +140,10 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                 override fun close() {
                     socket.close()
                     KdapHarness.stopProcess(process)
+                    val err = stderrBuf.toString().trim()
+                    if (err.isNotEmpty()) {
+                        System.err.println("[KDAP TCP_LISTEN stderr]: $err")
+                    }
                 }
             }
         }
@@ -131,6 +154,12 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             val server = ServerSocket(0)
             val port = server.localPort
             val process = KdapHarness.startAdapter("--connect", port.toString())
+            val stderrBuf = StringBuilder()
+            kotlin.concurrent.thread(isDaemon = true) {
+                process.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
+                    r.lineSequence().forEach { stderrBuf.appendLine(it) }
+                }
+            }
             val socket = server.accept().apply { soTimeout = 10_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = socket.getInputStream()
@@ -139,6 +168,10 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                     socket.close()
                     KdapHarness.stopProcess(process)
                     server.close()
+                    val err = stderrBuf.toString().trim()
+                    if (err.isNotEmpty()) {
+                        System.err.println("[KDAP TCP_CONNECT stderr]: $err")
+                    }
                 }
             }
         }
@@ -156,10 +189,17 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             val testFromServer = java.io.PipedInputStream(serverToClient)
             System.setIn(serverInput)
             System.setOut(java.io.PrintStream(serverToClient, /* autoFlush = */ true))
+            val serverError = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
             val serverReady = CountDownLatch(1)
             val serverThread = thread {
                 serverReady.countDown()
-                main(arrayOf("--lldb-dap", lldbDapPath.absolutePath))
+                try {
+                    main(arrayOf("--lldb-dap", lldbDapPath.absolutePath))
+                } catch (e: Throwable) {
+                    serverError.set(e)
+                    System.err.println("[KDAP IN_PROCESS] main() threw: $e")
+                    e.printStackTrace(System.err)
+                }
             }
             serverReady.await()
             return object : ConnectionContext {
@@ -170,6 +210,9 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                     serverThread.join(5000)
                     System.setIn(originalIn)
                     System.setOut(originalOut)
+                    serverError.get()?.let { err ->
+                        System.err.println("[KDAP IN_PROCESS] Server thread failed: $err")
+                    }
                 }
             }
         }

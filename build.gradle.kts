@@ -26,7 +26,7 @@ tasks.test {
     testLogging {
         events("started", "passed", "skipped", "failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
-        showStandardStreams = false
+        showStandardStreams = true
     }
     afterTest(KotlinClosure2<TestDescriptor, TestResult, Unit>({ desc, result ->
         val duration = result.endTime - result.startTime

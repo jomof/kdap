@@ -57,19 +57,35 @@ jobs:
           PLATFORM_ID: ${{ matrix.platform_id }}
           LLVM_VERSION: ${{ env.LLVM_VERSION }}
         run: |
-          # Start Gradle compile in background so it warms up while downloads run.
+          # Start all three tasks in background.
           ./gradlew compileTestKotlin &
           GRADLE_PID=$!
           ./scripts/download-lldb.sh &
+          LLDB_PID=$!
           ./scripts/download-codelldb-vsix.sh &
+          VSIX_PID=$!
+          # Wait for each individually so any failure is caught.
+          # (bare 'wait' returns exit code of last-terminated job, hiding earlier failures)
           wait $GRADLE_PID
-          wait
+          wait $LLDB_PID
+          wait $VSIX_PID
 
       - name: Install lldb-dap runtime deps (Linux)
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y libxml2 libncurses6 libpython3.10
+
+      - name: Verify lldb-dap
+        env:
+          PLATFORM_ID: ${{ matrix.platform_id }}
+        run: |
+          EXE="prebuilts/lldb/$PLATFORM_ID/bin/lldb-dap"
+          [[ "$PLATFORM_ID" == win32-* ]] && EXE="${EXE}.exe"
+          echo "Checking: $EXE"
+          ls -la "$EXE" || { echo "lldb-dap not found!"; exit 1; }
+          echo "--- lldb-dap --version ---"
+          "$EXE" --version 2>&1 || echo "(exit code: $?)"
 
       - name: Run tests
         run: ./gradlew test

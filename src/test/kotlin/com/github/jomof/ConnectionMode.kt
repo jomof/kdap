@@ -1,7 +1,7 @@
 package com.github.jomof
 
 import com.github.jomof.dap.DapServer
-import java.io.ByteArrayOutputStream
+import com.github.jomof.dap.LldbDapProcess
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /** Runs shell commands to diagnose why a port never became reachable; returns combined output. */
-private fun runPortDiagnostics(port: Int, process: Process): String {
+private fun runPortDiagnostics(port: Int, lldbDap: LldbDapProcess): String {
     val out = StringBuilder()
     fun run(vararg cmd: String) {
         try {
@@ -23,18 +23,18 @@ private fun runPortDiagnostics(port: Int, process: Process): String {
             out.append("(failed: ${e.message})\n")
         }
     }
-    val pid = if (process.isAlive) process.pid().toString() else "exited"
+    val pid = if (lldbDap.isAlive) lldbDap.pid.toString() else "exited"
     out.append("--- port=$port pid=$pid ---\n")
     val os = System.getProperty("os.name").lowercase()
     when {
         os.contains("linux") -> {
             run("ss", "-tlnp")
             run("lsof", "-i", ":$port")
-            if (process.isAlive) run("ps", "-p", process.pid().toString(), "-o", "pid,state,etime,args")
+            if (lldbDap.isAlive) run("ps", "-p", lldbDap.pid.toString(), "-o", "pid,state,etime,args")
         }
         os.contains("mac") || os.contains("darwin") -> {
             run("lsof", "-i", ":$port")
-            if (process.isAlive) run("ps", "-p", process.pid().toString(), "-o", "pid,state,etime,command")
+            if (lldbDap.isAlive) run("ps", "-p", lldbDap.pid.toString(), "-o", "pid,state,etime,command")
         }
         else -> run("netstat", "-an")
     }
@@ -42,15 +42,58 @@ private fun runPortDiagnostics(port: Int, process: Process): String {
 }
 
 /**
- * Which server the connection talks to. Use in tests to expect different results.
+ * Test-level abstraction over behavioral differences between DAP server
+ * implementations. Each [ServerKind] implements this interface so tests can
+ * call server-specific operations polymorphically instead of switching on
+ * server kind.
  */
-enum class ServerKind {
+interface DapTestServer {
+    /**
+     * The `evaluate` context used for running LLDB commands on this server,
+     * or `null` if the server does not support evaluate.
+     *
+     * - CodeLLDB: `"_command"` (custom extension that returns output in the response body).
+     * - lldb-dap: `"repl"` (standard DAP; lldb-dap runs LLDB commands in repl context).
+     * - KDAP: `null` (not yet implemented).
+     */
+    val evaluateCommandContext: String?
+
+    /** Whether this server supports the `evaluate` DAP request. */
+    val supportsEvaluate: Boolean get() = evaluateCommandContext != null
+
+    /**
+     * Sends a DAP `evaluate` request to run [expression] as an LLDB command,
+     * using the appropriate context for this server.
+     *
+     * @throws IllegalStateException if this server does not support evaluate.
+     */
+    fun sendEvaluateRequest(output: OutputStream, seq: Int, expression: String) {
+        val context = evaluateCommandContext
+            ?: error("$this does not support the evaluate command")
+        DapTestUtils.sendEvaluateRequest(output, seq, expression, context)
+    }
+
+}
+
+/**
+ * Which server the connection talks to. Implements [DapTestServer] so tests
+ * get per-server behavior without `when` blocks.
+ */
+enum class ServerKind : DapTestServer {
     /** Our KDAP server (MainKt). */
-    OUR_SERVER,
+    OUR_SERVER {
+        override val evaluateCommandContext: String? = null
+    },
+
     /** lldb-dap from LLVM prebuilts. */
-    LLDB_DAP,
+    LLDB_DAP {
+        override val evaluateCommandContext = "repl"
+    },
+
     /** CodeLLDB adapter (from codelldb-vsix or KDAP_CODELDB_EXTENSION). */
-    CODELDB
+    CODELDB {
+        override val evaluateCommandContext = "_command"
+    }
 }
 
 /**
@@ -128,16 +171,18 @@ enum class ConnectionMode(val serverKind: ServerKind) {
         override fun connect(): ConnectionContext {
             if (!LldbDapHarness.isAvailable())
                 throw IllegalStateException("lldb-dap not available (run scripts/download-lldb.sh or set KDAP_LLDB_ROOT)")
-            val (process, port) = LldbDapHarness.startLldbDapTcp()
+            val (lldbDap, port) = LldbDapHarness.startTcp()
             val stdoutBuf = StringBuilder()
             val stderrBuf = StringBuilder()
+            // In TCP mode lldb-dap's stdout/stderr are not DAP traffic — capture
+            // them for diagnostics in case the connection fails to come up.
             thread(isDaemon = true) {
-                process.inputStream.bufferedReader(Charsets.UTF_8).use { r ->
+                lldbDap.inputStream.bufferedReader(Charsets.UTF_8).use { r ->
                     r.lineSequence().forEach { stdoutBuf.appendLine(it) }
                 }
             }
             thread(isDaemon = true) {
-                process.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
+                lldbDap.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
                     r.lineSequence().forEach { stderrBuf.appendLine(it) }
                 }
             }
@@ -148,13 +193,13 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                     override val outputStream: OutputStream = socket.getOutputStream()
                     override fun close() {
                         socket.close()
-                        LldbDapHarness.stopProcess(process)
+                        lldbDap.close()
                     }
                 }
             } catch (e: IllegalStateException) {
-                val diagnostics = runPortDiagnostics(port, process)
-                LldbDapHarness.stopProcess(process)
-                val exitInfo = if (!process.isAlive) " (lldb-dap exited with ${process.exitValue()})" else ""
+                val diagnostics = runPortDiagnostics(port, lldbDap)
+                lldbDap.close()
+                val exitInfo = if (!lldbDap.isAlive) " (lldb-dap exited with ${lldbDap.exitValue})" else ""
                 val out = stdoutBuf.toString().trim().takeLast(2000).ifEmpty { "(no stdout)" }
                 val err = stderrBuf.toString().trim().takeLast(2000).ifEmpty { "(no stderr)" }
                 val emptyNote = if (out == "(no stdout)" && err == "(no stderr)")

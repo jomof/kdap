@@ -64,33 +64,44 @@ class DapLaunchTest {
      * Executes the full DAP launch lifecycle:
      *   initialize → launch → (initialized event) → configurationDone → (terminated event)
      *
-     * On failure, the exception is enriched with the current phase and server
-     * diagnostics (stderr, process state) so CI failures are actionable.
+     * On failure, the exception is enriched with the current phase, a log of
+     * every DAP message exchanged, and server diagnostics (stderr, process state)
+     * so CI failures are actionable.
      */
     private fun runLaunchToTerminated(ctx: ConnectionContext, mode: ConnectionMode, program: String) {
         val input = ctx.inputStream
         val output = ctx.outputStream
         var phase = "setup"
+        // Accumulates a human-readable log of every DAP message for failure diagnostics.
+        val messageLog = mutableListOf<String>()
 
         try {
             // 1. Initialize (may already be done as a connection handshake)
             phase = "initialize (sending request and reading response)"
             val initResponse = ctx.initializeResponse ?: run {
+                messageLog.add("→ sent: initialize request (seq=1)")
                 DapTestUtils.sendInitializeRequest(output)
-                DapTestUtils.readDapMessage(input)
+                DapTestUtils.readDapMessage(input).also {
+                    messageLog.add("← recv: initialize response")
+                }
+            }
+            if (ctx.initializeResponse != null) {
+                messageLog.add("(initialize already completed during connection handshake)")
             }
             DapTestUtils.assertValidInitializeResponse(initResponse)
 
             // 2. Launch (server-specific format)
             phase = "launch (sending launch request for $program)"
+            messageLog.add("→ sent: launch request (seq=2, program=$program)")
             mode.serverKind.testServer.sendLaunchRequest(output, seq = 2, program = program)
 
             // 3. Wait for 'initialized' event (adapter is ready for breakpoint config)
             phase = "waiting for 'initialized' event"
-            DapTestUtils.readEventOfType(input, "initialized")
+            readEventAndLog(input, "initialized", messageLog)
 
             // 4. ConfigurationDone (we have no breakpoints to set)
             phase = "configurationDone"
+            messageLog.add("→ sent: configurationDone request (seq=3)")
             DapTestUtils.sendConfigurationDoneRequest(output, seq = 3)
 
             // 5. Wait for 'terminated' event (program ran to completion)
@@ -99,12 +110,56 @@ class DapLaunchTest {
             //    macOS debuggees load 100+ dylibs → 100+ module events, so we need a
             //    generous limit here.
             phase = "waiting for 'terminated' event"
-            DapTestUtils.readEventOfType(input, "terminated", maxMessages = 500)
+            readEventAndLog(input, "terminated", messageLog, maxMessages = 500)
 
             // If we get here, the full launch lifecycle completed successfully.
         } catch (e: Exception) {
             val diag = try { ctx.diagnostics() } catch (_: Exception) { "(diagnostics unavailable)" }
-            throw AssertionError("[$mode] Failed during phase: $phase\n$diag", e)
+            val log = messageLog.joinToString("\n  ", prefix = "  ")
+            throw AssertionError(
+                "[$mode] Failed during phase: $phase\n" +
+                "DAP message log (${messageLog.size} entries):\n$log\n$diag", e
+            )
         }
+    }
+
+    /**
+     * Reads DAP messages until [eventType] is found, logging every message to [log].
+     * Failed responses are logged with their full error message.
+     */
+    private fun readEventAndLog(
+        input: InputStream,
+        eventType: String,
+        log: MutableList<String>,
+        maxMessages: Int = 50,
+    ): String {
+        repeat(maxMessages) {
+            val message = DapTestUtils.readDapMessage(input)
+            val json = JSONObject(message)
+            val type = json.optString("type", "?")
+            when (type) {
+                "event" -> {
+                    val event = json.optString("event")
+                    if (event == eventType) {
+                        log.add("← recv: event:$event (TARGET — found)")
+                        return message
+                    }
+                    log.add("← recv: event:$event")
+                }
+                "response" -> {
+                    val cmd = json.optString("command")
+                    val success = json.optBoolean("success")
+                    val msg = json.optString("message", "")
+                    if (success) {
+                        log.add("← recv: response:$cmd success=true")
+                    } else {
+                        // Failed response — include full error detail, this is critical
+                        log.add("← recv: response:$cmd success=false message=\"$msg\" body=${json.optJSONObject("body")}")
+                    }
+                }
+                else -> log.add("← recv: $type")
+            }
+        }
+        error("No '$eventType' event within $maxMessages messages")
     }
 }

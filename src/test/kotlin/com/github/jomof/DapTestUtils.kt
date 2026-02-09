@@ -309,11 +309,21 @@ object DapTestUtils {
                 if (json.optString("type") == "event" && json.optString("event") == eventType) {
                     return message
                 }
-                // Summarize for diagnostics
+                // Summarize for diagnostics — include error details from failed responses
                 val type = json.optString("type", "?")
                 val detail = when (type) {
                     "event" -> "event:${json.optString("event")}"
-                    "response" -> "response:${json.optString("command")} success=${json.optBoolean("success")}"
+                    "response" -> {
+                        val cmd = json.optString("command")
+                        val success = json.optBoolean("success")
+                        val msg = json.optString("message", "")
+                        val bodyError = json.optJSONObject("body")?.optString("error", "") ?: ""
+                        buildString {
+                            append("response:$cmd success=$success")
+                            if (!success && msg.isNotEmpty()) append(" message=\"$msg\"")
+                            if (!success && bodyError.isNotEmpty()) append(" body.error=\"$bodyError\"")
+                        }
+                    }
                     else -> type
                 }
                 skipped.add(detail)

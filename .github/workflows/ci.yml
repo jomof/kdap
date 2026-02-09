@@ -73,6 +73,29 @@ jobs:
           wait $VSIX_PID
           wait $DEBUGGEE_PID
 
+      # macOS: the prebuilt lldb-dap binary loses its code signature during
+      # download/extraction.  Without an ad-hoc signature, macOS blocks
+      # task_for_pid (required for debugging), so lldb-dap can start a DAP
+      # session but can't actually launch/control a debuggee — the
+      # 'terminated' event never arrives and DapLaunchTest hangs.
+      # Re-signing lldb-dap and the debuggee restores debugging capability.
+      - name: Code-sign binaries for debugging (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # Ad-hoc sign lldb-dap so it can use task_for_pid for debugging.
+          lldb_dap="prebuilts/lldb/${{ matrix.platform_id }}/bin/lldb-dap"
+          if [ -f "$lldb_dap" ]; then
+            codesign --force --sign - "$lldb_dap"
+            echo "Signed $lldb_dap"
+          fi
+          # Ad-hoc sign the debuggee so lldb can attach to it.
+          for f in debuggee/build/debuggee debuggee/build/debuggee2; do
+            if [ -f "$f" ]; then
+              codesign --force --sign - "$f"
+              echo "Signed $f"
+            fi
+          done
+
       - name: Install lldb-dap runtime deps (Linux)
         if: matrix.os == 'ubuntu-22.04'
         run: |
@@ -91,7 +114,15 @@ jobs:
           python-version: "3.10"
 
       - name: Run tests
-        run: ./gradlew test
+        run: ./gradlew test --stacktrace
+
+      - name: Upload test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ matrix.platform_id }}
+          path: build/reports/tests/test/
+          retention-days: 7
 
       - name: Benchmark
         run: ./gradlew benchmark

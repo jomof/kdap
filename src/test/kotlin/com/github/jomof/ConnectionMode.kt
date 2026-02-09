@@ -1,6 +1,7 @@
 package com.github.jomof
 
 import com.github.jomof.dap.LldbDapProcess
+import java.io.BufferedInputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
@@ -166,7 +167,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                 }
             }
             return object : ConnectionContext {
-                override val inputStream: InputStream = TimeoutInputStream(process.inputStream)
+                override val inputStream: InputStream = TimeoutInputStream(BufferedInputStream(process.inputStream, DAP_READ_BUFFER_SIZE))
                 override val outputStream: OutputStream = process.outputStream
                 override fun diagnostics(): String = processDiagnostics("kdap", process, stderr = stderrBuf)
                 override fun close() {
@@ -187,7 +188,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             }
             val socket = TcpTestUtils.connectToPort(port).apply { soTimeout = 10_000 }
             return object : ConnectionContext {
-                override val inputStream: InputStream = socket.getInputStream()
+                override val inputStream: InputStream = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
                 override val outputStream: OutputStream = socket.getOutputStream()
                 override fun diagnostics(): String = processDiagnostics("kdap", process, stderr = stderrBuf)
                 override fun close() {
@@ -211,7 +212,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             }
             val socket = server.accept().apply { soTimeout = 10_000 }
             return object : ConnectionContext {
-                override val inputStream: InputStream = socket.getInputStream()
+                override val inputStream: InputStream = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
                 override val outputStream: OutputStream = socket.getOutputStream()
                 override fun diagnostics(): String = processDiagnostics("kdap", process, stderr = stderrBuf)
                 override fun close() {
@@ -243,7 +244,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             }
             val socket = TcpTestUtils.connectToPort(port, 10_000).apply { soTimeout = 10_000 }
             return object : ConnectionContext {
-                override val inputStream: InputStream = socket.getInputStream()
+                override val inputStream: InputStream = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
                 override val outputStream: OutputStream = socket.getOutputStream()
                 override fun diagnostics(): String = buildString {
                     appendLine("kdap (in-process) diagnostics:")
@@ -297,12 +298,13 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                     continue
                 }
                 try {
+                    val buffered = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
                     DapTestUtils.sendInitializeRequest(socket.getOutputStream())
-                    val response = DapTestUtils.readDapMessage(socket.getInputStream())
+                    val response = DapTestUtils.readDapMessage(buffered)
                     DapTestUtils.assertValidInitializeResponse(response)
                     // Handshake succeeded — server is genuinely ready for DAP traffic.
                     return object : ConnectionContext {
-                        override val inputStream: InputStream = socket.getInputStream()
+                        override val inputStream: InputStream = buffered
                         override val outputStream: OutputStream = socket.getOutputStream()
                         override val initializeResponse: String = response
                         override fun diagnostics(): String =
@@ -343,7 +345,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                 }
             }
             return object : ConnectionContext {
-                override val inputStream: InputStream = TimeoutInputStream(process.inputStream)
+                override val inputStream: InputStream = TimeoutInputStream(BufferedInputStream(process.inputStream, DAP_READ_BUFFER_SIZE))
                 override val outputStream: OutputStream = process.outputStream
                 override fun diagnostics(): String = processDiagnostics("codelldb", process, stderr = stderrBuf)
                 override fun close() = CodeLldbHarness.stopProcess(process)
@@ -364,7 +366,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             }
             val socket = TcpTestUtils.connectToPort(port, 30_000).apply { soTimeout = 15_000 }
             return object : ConnectionContext {
-                override val inputStream: InputStream = socket.getInputStream()
+                override val inputStream: InputStream = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
                 override val outputStream: OutputStream = socket.getOutputStream()
                 override fun diagnostics(): String = processDiagnostics("codelldb", process, stderr = stderrBuf)
                 override fun close() {
@@ -404,6 +406,17 @@ enum class ConnectionMode(val serverKind: ServerKind) {
         fun codelldbModes(): List<ConnectionMode> = entries.filter { it.serverKind == ServerKind.CODELDB }
     }
 }
+
+/**
+ * Buffer size for [BufferedInputStream] wrapping all DAP input streams.
+ *
+ * A 64 KB buffer means [readDapMessage]'s byte-by-byte header reads hit the
+ * in-memory buffer instead of issuing a syscall per byte. More importantly,
+ * the large read calls on the underlying socket keep the TCP receive buffer
+ * drained, preventing TCP back-pressure that can trigger WSAEWOULDBLOCK errors
+ * in servers that use non-blocking sockets (e.g. lldb-dap on Windows).
+ */
+private const val DAP_READ_BUFFER_SIZE = 65_536
 
 /**
  * A connection to the DAP server: input/output streams, [close] for cleanup,

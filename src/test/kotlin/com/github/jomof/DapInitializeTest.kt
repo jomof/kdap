@@ -1,9 +1,11 @@
 package com.github.jomof
 
 import org.junit.jupiter.api.Assertions
+import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.EnumSource
 import org.junit.jupiter.params.provider.MethodSource
+import java.util.concurrent.TimeUnit
 
 /**
  * Tests that the DAP server responds to `initialize`. Runs for each connection mode
@@ -13,6 +15,7 @@ import org.junit.jupiter.params.provider.MethodSource
  * documented and structural differences between server types are immediately visible.
  * Strict comparison catches both missing and unexpected keys.
  */
+@Timeout(value = 60, unit = TimeUnit.SECONDS)
 class DapInitializeTest {
 
     /**

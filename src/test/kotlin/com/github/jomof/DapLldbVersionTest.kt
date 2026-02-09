@@ -2,8 +2,10 @@ package com.github.jomof
 
 import org.json.JSONObject
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.EnumSource
+import java.util.concurrent.TimeUnit
 
 /**
  * Proves that each LLDB-backed adapter is communicating with lldb/liblldb by running
@@ -22,6 +24,7 @@ import org.junit.jupiter.params.provider.EnumSource
  * response shape is documented. The `result` field is shown for documentation but
  * excluded from strict comparison since the exact version string changes per release.
  */
+@Timeout(value = 60, unit = TimeUnit.SECONDS)
 class DapLldbVersionTest {
 
     /**

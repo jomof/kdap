@@ -166,7 +166,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                 }
             }
             return object : ConnectionContext {
-                override val inputStream: InputStream = process.inputStream
+                override val inputStream: InputStream = TimeoutInputStream(process.inputStream)
                 override val outputStream: OutputStream = process.outputStream
                 override fun diagnostics(): String = processDiagnostics("kdap", process, stderr = stderrBuf)
                 override fun close() {
@@ -343,7 +343,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                 }
             }
             return object : ConnectionContext {
-                override val inputStream: InputStream = process.inputStream
+                override val inputStream: InputStream = TimeoutInputStream(process.inputStream)
                 override val outputStream: OutputStream = process.outputStream
                 override fun diagnostics(): String = processDiagnostics("codelldb", process, stderr = stderrBuf)
                 override fun close() = CodeLldbHarness.stopProcess(process)
@@ -427,4 +427,48 @@ interface ConnectionContext : AutoCloseable {
      * failure to enrich exception messages.
      */
     fun diagnostics(): String = "(no diagnostics available)"
+}
+
+/**
+ * Wraps a [Process] [InputStream] (which has no native timeout support) with
+ * a polling timeout using [available]. If no byte becomes available within
+ * [timeoutMs], throws [java.net.SocketTimeoutException].
+ *
+ * This gives STDIO-mode connections the same timeout behavior as TCP sockets
+ * with `soTimeout`, preventing tests from hanging indefinitely when a debug
+ * adapter stops producing output.
+ */
+class TimeoutInputStream(
+    private val delegate: InputStream,
+    private val timeoutMs: Long = 30_000L
+) : InputStream() {
+
+    override fun read(): Int {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (true) {
+            if (delegate.available() > 0) return delegate.read()
+            if (System.currentTimeMillis() >= deadline) {
+                throw java.net.SocketTimeoutException(
+                    "STDIO read timed out: no data received within ${timeoutMs}ms"
+                )
+            }
+            Thread.sleep(5)
+        }
+    }
+
+    override fun read(b: ByteArray, off: Int, len: Int): Int {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (true) {
+            if (delegate.available() > 0) return delegate.read(b, off, len)
+            if (System.currentTimeMillis() >= deadline) {
+                throw java.net.SocketTimeoutException(
+                    "STDIO read timed out: no data received within ${timeoutMs}ms"
+                )
+            }
+            Thread.sleep(5)
+        }
+    }
+
+    override fun available(): Int = delegate.available()
+    override fun close() = delegate.close()
 }

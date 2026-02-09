@@ -2,11 +2,13 @@ package com.github.jomof
 
 import org.json.JSONObject
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.EnumSource
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.concurrent.TimeUnit
 
 /**
  * Tests that the DAP server can launch a program and run it to completion.
@@ -28,6 +30,7 @@ import java.io.OutputStream
  * arguments prints "No testcase was specified." and exits with -1 (255). This
  * is intentional — we only care that the full launch lifecycle completes.
  */
+@Timeout(value = 120, unit = TimeUnit.SECONDS)
 class DapLaunchTest {
 
     companion object {

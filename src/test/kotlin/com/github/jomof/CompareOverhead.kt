@@ -22,7 +22,7 @@ import kotlin.concurrent.thread
  *   ./gradlew benchmark -Pn=500
  */
 fun main(args: Array<String>) {
-    var n = 1000
+    var n = 500
     var i = 0
     while (i < args.size) {
         when (args[i]) {

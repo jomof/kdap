@@ -53,6 +53,13 @@ interface DapTestServer {
      * never need to think about it.
      */
     fun sendEvaluateRequest(output: OutputStream, seq: Int, expression: String)
+
+    /**
+     * Sends a DAP `launch` request for [program]. Each server kind adds
+     * the appropriate extra arguments internally (e.g. CodeLLDB needs
+     * `terminal` and `name`; lldb-dap does not).
+     */
+    fun sendLaunchRequest(output: OutputStream, seq: Int, program: String)
 }
 
 /**
@@ -65,12 +72,18 @@ interface DapTestServer {
 private val codelldbCompatibleTestServer = object : DapTestServer {
     override fun sendEvaluateRequest(output: OutputStream, seq: Int, expression: String) =
         DapTestUtils.sendEvaluateRequest(output, seq, expression, "_command")
+
+    override fun sendLaunchRequest(output: OutputStream, seq: Int, program: String) =
+        DapTestUtils.sendLaunchRequest(output, seq, program, mapOf("name" to "test", "terminal" to "console"))
 }
 
 /** [DapTestServer] for raw lldb-dap (no KDAP or CodeLLDB in front). */
 private val lldbDapTestServer = object : DapTestServer {
     override fun sendEvaluateRequest(output: OutputStream, seq: Int, expression: String) =
         DapTestUtils.sendEvaluateRequest(output, seq, expression, "repl")
+
+    override fun sendLaunchRequest(output: OutputStream, seq: Int, program: String) =
+        DapTestUtils.sendLaunchRequest(output, seq, program)
 }
 
 /**

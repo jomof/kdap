@@ -52,23 +52,26 @@ jobs:
           path: codelldb-vsix
           key: codelldb-vsix-${{ matrix.os }}-${{ runner.arch }}
 
-      - name: Download prebuilts and compile in parallel
+      - name: Download prebuilts, compile, and build debuggee in parallel
         env:
           PLATFORM_ID: ${{ matrix.platform_id }}
           LLVM_VERSION: ${{ env.LLVM_VERSION }}
         run: |
-          # Start all three tasks in background.
+          # Start all four tasks in background.
           ./gradlew compileTestKotlin &
           GRADLE_PID=$!
           ./scripts/download-lldb.sh &
           LLDB_PID=$!
           ./scripts/download-codelldb-vsix.sh &
           VSIX_PID=$!
+          (cmake -B debuggee/build debuggee -DCMAKE_BUILD_TYPE=Debug && cmake --build debuggee/build) &
+          DEBUGGEE_PID=$!
           # Wait for each individually so any failure is caught.
           # (bare 'wait' returns exit code of last-terminated job, hiding earlier failures)
           wait $GRADLE_PID
           wait $LLDB_PID
           wait $VSIX_PID
+          wait $DEBUGGEE_PID
 
       - name: Install lldb-dap runtime deps (Linux)
         if: matrix.os == 'ubuntu-22.04'

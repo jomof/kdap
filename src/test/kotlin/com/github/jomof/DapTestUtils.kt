@@ -245,6 +245,64 @@ object DapTestUtils {
         error("No response for request_seq=$requestSeq within $maxMessages messages")
     }
 
+    // ── Launch / configurationDone helpers ─────────────────────────────────
+
+    /**
+     * Sends a DAP `launch` request.
+     *
+     * [extraArgs] is merged into the `arguments` object so callers can add
+     * server-specific fields (e.g. CodeLLDB needs `"terminal":"console"`).
+     */
+    fun sendLaunchRequest(output: OutputStream, seq: Int, program: String, extraArgs: Map<String, Any> = emptyMap()) {
+        val args = JSONObject().apply {
+            put("program", program)
+            for ((k, v) in extraArgs) put(k, v)
+        }
+        val json = JSONObject().apply {
+            put("type", "request")
+            put("seq", seq)
+            put("command", "launch")
+            put("arguments", args)
+        }
+        sendRequest(output, json.toString())
+    }
+
+    /** Sends a DAP `configurationDone` request. */
+    fun sendConfigurationDoneRequest(output: OutputStream, seq: Int) {
+        val json = JSONObject().apply {
+            put("type", "request")
+            put("seq", seq)
+            put("command", "configurationDone")
+            put("arguments", JSONObject())
+        }
+        sendRequest(output, json.toString())
+    }
+
+    /**
+     * Reads DAP messages via [readDapMessage] until an **event** with the given
+     * [eventType] is found. Non-matching messages (responses, other events) are
+     * skipped. Throws if [maxMessages] messages are read without finding it.
+     */
+    fun readEventOfType(input: InputStream, eventType: String, maxMessages: Int = 50): String {
+        val skipped = mutableListOf<String>()
+        repeat(maxMessages) {
+            val message = readDapMessage(input)
+            val json = JSONObject(message)
+            if (json.optString("type") == "event" && json.optString("event") == eventType) {
+                return message
+            }
+            // Summarize for diagnostics
+            val type = json.optString("type", "?")
+            val detail = when (type) {
+                "event" -> "event:${json.optString("event")}"
+                "response" -> "response:${json.optString("command")} success=${json.optBoolean("success")}"
+                else -> type
+            }
+            skipped.add(detail)
+        }
+        error("No '$eventType' event within $maxMessages messages. Saw: $skipped")
+    }
+
     /** DAP error response: success false, message (internal error or method not found). */
     fun assertInternalErrorResponse(responseBody: String, expectedMessage: String = KdapInterceptor.INTERNAL_ERROR_MESSAGE) {
         org.junit.jupiter.api.Assertions.assertTrue(

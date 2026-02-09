@@ -52,3 +52,6 @@ codelldb-vsix/
 lldb-build/
 lldb-install/
 prebuilts/
+
+### Debuggee build artifacts (built by cmake) ###
+debuggee/build/

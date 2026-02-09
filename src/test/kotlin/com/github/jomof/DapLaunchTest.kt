@@ -60,32 +60,46 @@ class DapLaunchTest {
     /**
      * Executes the full DAP launch lifecycle:
      *   initialize → launch → (initialized event) → configurationDone → (terminated event)
+     *
+     * On failure, the exception is enriched with the current phase and server
+     * diagnostics (stderr, process state) so CI failures are actionable.
      */
     private fun runLaunchToTerminated(ctx: ConnectionContext, mode: ConnectionMode, program: String) {
         val input = ctx.inputStream
         val output = ctx.outputStream
+        var phase = "setup"
 
-        // 1. Initialize
-        DapTestUtils.sendInitializeRequest(output)
-        val initResponse = DapTestUtils.readDapMessage(input)
-        DapTestUtils.assertValidInitializeResponse(initResponse)
+        try {
+            // 1. Initialize
+            phase = "initialize (sending request and reading response)"
+            DapTestUtils.sendInitializeRequest(output)
+            val initResponse = DapTestUtils.readDapMessage(input)
+            DapTestUtils.assertValidInitializeResponse(initResponse)
 
-        // 2. Launch (server-specific format)
-        mode.serverKind.testServer.sendLaunchRequest(output, seq = 2, program = program)
+            // 2. Launch (server-specific format)
+            phase = "launch (sending launch request for $program)"
+            mode.serverKind.testServer.sendLaunchRequest(output, seq = 2, program = program)
 
-        // 3. Wait for 'initialized' event (adapter is ready for breakpoint config)
-        DapTestUtils.readEventOfType(input, "initialized")
+            // 3. Wait for 'initialized' event (adapter is ready for breakpoint config)
+            phase = "waiting for 'initialized' event"
+            DapTestUtils.readEventOfType(input, "initialized")
 
-        // 4. ConfigurationDone (we have no breakpoints to set)
-        DapTestUtils.sendConfigurationDoneRequest(output, seq = 3)
+            // 4. ConfigurationDone (we have no breakpoints to set)
+            phase = "configurationDone"
+            DapTestUtils.sendConfigurationDoneRequest(output, seq = 3)
 
-        // 5. Wait for 'terminated' event (program ran to completion)
-        //    Other messages (launch response, configurationDone response, process
-        //    event, exited event, thread events, module events, etc.) are skipped.
-        //    macOS debuggees load 100+ dylibs → 100+ module events, so we need a
-        //    generous limit here.
-        DapTestUtils.readEventOfType(input, "terminated", maxMessages = 500)
+            // 5. Wait for 'terminated' event (program ran to completion)
+            //    Other messages (launch response, configurationDone response, process
+            //    event, exited event, thread events, module events, etc.) are skipped.
+            //    macOS debuggees load 100+ dylibs → 100+ module events, so we need a
+            //    generous limit here.
+            phase = "waiting for 'terminated' event"
+            DapTestUtils.readEventOfType(input, "terminated", maxMessages = 500)
 
-        // If we get here, the full launch lifecycle completed successfully.
+            // If we get here, the full launch lifecycle completed successfully.
+        } catch (e: Exception) {
+            val diag = try { ctx.diagnostics() } catch (_: Exception) { "(diagnostics unavailable)" }
+            throw AssertionError("[$mode] Failed during phase: $phase\n$diag", e)
+        }
     }
 }

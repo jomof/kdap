@@ -8,6 +8,49 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
+/**
+ * Builds a diagnostic string for a server subprocess: alive/exited state,
+ * exit code, and captured stderr/stdout (last 2000 chars each).
+ */
+private fun processDiagnostics(
+    name: String,
+    process: Process,
+    stdout: StringBuilder? = null,
+    stderr: StringBuilder? = null,
+): String = buildString {
+    appendLine("$name diagnostics:")
+    if (process.isAlive) {
+        appendLine("  process: alive (pid ${process.pid()})")
+    } else {
+        appendLine("  process: exited with code ${process.exitValue()}")
+    }
+    val err = stderr?.toString()?.trim()?.takeLast(2000)
+    val out = stdout?.toString()?.trim()?.takeLast(2000)
+    if (!out.isNullOrEmpty()) appendLine("  stdout:\n    ${out.replace("\n", "\n    ")}")
+    if (!err.isNullOrEmpty()) appendLine("  stderr:\n    ${err.replace("\n", "\n    ")}")
+    if (out.isNullOrEmpty() && err.isNullOrEmpty()) appendLine("  (no stdout/stderr captured)")
+}
+
+/** Builds a diagnostic string for a [LldbDapProcess] (delegates to [processDiagnostics]). */
+private fun processDiagnostics(
+    name: String,
+    lldbDap: LldbDapProcess,
+    stdout: StringBuilder? = null,
+    stderr: StringBuilder? = null,
+): String = buildString {
+    appendLine("$name diagnostics:")
+    if (lldbDap.isAlive) {
+        appendLine("  process: alive (pid ${lldbDap.pid})")
+    } else {
+        appendLine("  process: exited with code ${lldbDap.exitValue}")
+    }
+    val err = stderr?.toString()?.trim()?.takeLast(2000)
+    val out = stdout?.toString()?.trim()?.takeLast(2000)
+    if (!out.isNullOrEmpty()) appendLine("  stdout:\n    ${out.replace("\n", "\n    ")}")
+    if (!err.isNullOrEmpty()) appendLine("  stderr:\n    ${err.replace("\n", "\n    ")}")
+    if (out.isNullOrEmpty() && err.isNullOrEmpty()) appendLine("  (no stdout/stderr captured)")
+}
+
 /** Runs shell commands to diagnose why a port never became reachable; returns combined output. */
 private fun runPortDiagnostics(port: Int, lldbDap: LldbDapProcess): String {
     val out = StringBuilder()
@@ -117,7 +160,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
         override fun connect(): ConnectionContext {
             val process = KdapHarness.startAdapter()
             val stderrBuf = StringBuilder()
-            val stderrThread = kotlin.concurrent.thread(isDaemon = true) {
+            kotlin.concurrent.thread(isDaemon = true) {
                 process.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
                     r.lineSequence().forEach { stderrBuf.appendLine(it) }
                 }
@@ -125,13 +168,9 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             return object : ConnectionContext {
                 override val inputStream: InputStream = process.inputStream
                 override val outputStream: OutputStream = process.outputStream
-                override val stderr: String get() = stderrBuf.toString()
+                override fun diagnostics(): String = processDiagnostics("kdap", process, stderr = stderrBuf)
                 override fun close() {
                     KdapHarness.stopProcess(process)
-                    val err = stderrBuf.toString().trim()
-                    if (err.isNotEmpty()) {
-                        System.err.println("[KDAP STDIO stderr]: $err")
-                    }
                 }
             }
         }
@@ -150,13 +189,10 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             return object : ConnectionContext {
                 override val inputStream: InputStream = socket.getInputStream()
                 override val outputStream: OutputStream = socket.getOutputStream()
+                override fun diagnostics(): String = processDiagnostics("kdap", process, stderr = stderrBuf)
                 override fun close() {
                     socket.close()
                     KdapHarness.stopProcess(process)
-                    val err = stderrBuf.toString().trim()
-                    if (err.isNotEmpty()) {
-                        System.err.println("[KDAP TCP_LISTEN stderr]: $err")
-                    }
                 }
             }
         }
@@ -177,14 +213,11 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             return object : ConnectionContext {
                 override val inputStream: InputStream = socket.getInputStream()
                 override val outputStream: OutputStream = socket.getOutputStream()
+                override fun diagnostics(): String = processDiagnostics("kdap", process, stderr = stderrBuf)
                 override fun close() {
                     socket.close()
                     KdapHarness.stopProcess(process)
                     server.close()
-                    val err = stderrBuf.toString().trim()
-                    if (err.isNotEmpty()) {
-                        System.err.println("[KDAP TCP_CONNECT stderr]: $err")
-                    }
                 }
             }
         }
@@ -212,12 +245,14 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             return object : ConnectionContext {
                 override val inputStream: InputStream = socket.getInputStream()
                 override val outputStream: OutputStream = socket.getOutputStream()
+                override fun diagnostics(): String = buildString {
+                    appendLine("kdap (in-process) diagnostics:")
+                    appendLine("  server thread alive: ${serverThread.isAlive}")
+                    serverError.get()?.let { appendLine("  server error: $it") }
+                }
                 override fun close() {
                     socket.close()
                     serverThread.join(5000)
-                    serverError.get()?.let { err ->
-                        System.err.println("[KDAP IN_PROCESS] Server thread failed: $err")
-                    }
                 }
             }
         }
@@ -251,6 +286,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                 object : ConnectionContext {
                     override val inputStream: InputStream = socket.getInputStream()
                     override val outputStream: OutputStream = socket.getOutputStream()
+                    override fun diagnostics(): String = processDiagnostics("lldb-dap", lldbDap, stdoutBuf, stderrBuf)
                     override fun close() {
                         socket.close()
                         lldbDap.close()
@@ -281,9 +317,16 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             if (!CodeLldbHarness.isAvailable())
                 throw IllegalStateException("CodeLLDB adapter not available (run scripts/download-codelldb-vsix.sh or set KDAP_CODELDB_EXTENSION)")
             val process = CodeLldbHarness.startAdapter()
+            val stderrBuf = StringBuilder()
+            kotlin.concurrent.thread(isDaemon = true) {
+                process.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
+                    r.lineSequence().forEach { stderrBuf.appendLine(it) }
+                }
+            }
             return object : ConnectionContext {
                 override val inputStream: InputStream = process.inputStream
                 override val outputStream: OutputStream = process.outputStream
+                override fun diagnostics(): String = processDiagnostics("codelldb", process, stderr = stderrBuf)
                 override fun close() = CodeLldbHarness.stopProcess(process)
             }
         }
@@ -294,10 +337,17 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             if (!CodeLldbHarness.isAvailable())
                 throw IllegalStateException("CodeLLDB adapter not available (run scripts/download-codelldb-vsix.sh or set KDAP_CODELDB_EXTENSION)")
             val (process, port) = CodeLldbHarness.startAdapterTcp()
+            val stderrBuf = StringBuilder()
+            kotlin.concurrent.thread(isDaemon = true) {
+                process.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
+                    r.lineSequence().forEach { stderrBuf.appendLine(it) }
+                }
+            }
             val socket = TcpTestUtils.connectToPort(port, 30_000).apply { soTimeout = 15_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = socket.getInputStream()
                 override val outputStream: OutputStream = socket.getOutputStream()
+                override fun diagnostics(): String = processDiagnostics("codelldb", process, stderr = stderrBuf)
                 override fun close() {
                     socket.close()
                     CodeLldbHarness.stopProcess(process)
@@ -337,11 +387,17 @@ enum class ConnectionMode(val serverKind: ServerKind) {
 }
 
 /**
- * A connection to the DAP server: input/output streams and [close] for cleanup.
- * [stderr] is non-empty only for STDIO_LLDB (lldb-dap's stderr capture for diagnostics).
+ * A connection to the DAP server: input/output streams, [close] for cleanup,
+ * and [diagnostics] for failure reporting.
  */
 interface ConnectionContext : AutoCloseable {
     val inputStream: InputStream
     val outputStream: OutputStream
-    val stderr: String get() = ""
+
+    /**
+     * Returns a human-readable summary of the server's state for failure
+     * diagnostics: stderr output, process exit code, etc. Called on test
+     * failure to enrich exception messages.
+     */
+    fun diagnostics(): String = "(no diagnostics available)"
 }

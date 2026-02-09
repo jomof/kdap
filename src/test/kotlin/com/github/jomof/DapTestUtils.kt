@@ -198,23 +198,33 @@ object DapTestUtils {
         val headerBuf = ByteArrayOutputStream()
         var consecutiveCrLf = 0
         var expectLf = false
-        while (true) {
-            val b = input.read()
-            if (b == -1) error("EOF while reading DAP message header")
-            headerBuf.write(b)
-            if (expectLf) {
-                expectLf = false
-                if (b == '\n'.code) {
-                    consecutiveCrLf++
-                    if (consecutiveCrLf == 2) break
+        try {
+            while (true) {
+                val b = input.read()
+                if (b == -1) {
+                    val partial = headerBuf.toString(StandardCharsets.UTF_8.name()).take(200)
+                    error("EOF while reading DAP message header (${headerBuf.size()} bytes read so far: \"$partial\")")
+                }
+                headerBuf.write(b)
+                if (expectLf) {
+                    expectLf = false
+                    if (b == '\n'.code) {
+                        consecutiveCrLf++
+                        if (consecutiveCrLf == 2) break
+                    } else {
+                        consecutiveCrLf = 0
+                    }
+                } else if (b == '\r'.code) {
+                    expectLf = true
                 } else {
                     consecutiveCrLf = 0
                 }
-            } else if (b == '\r'.code) {
-                expectLf = true
-            } else {
-                consecutiveCrLf = 0
             }
+        } catch (e: java.net.SocketException) {
+            val partial = headerBuf.toString(StandardCharsets.UTF_8.name()).take(200)
+            throw java.net.SocketException(
+                "Connection lost while reading DAP header (${headerBuf.size()} header bytes read so far: \"$partial\"): ${e.message}"
+            ).initCause(e)
         }
         val header = headerBuf.toString(StandardCharsets.UTF_8.name())
         val match = Regex("""Content-Length:\s*(\d+)""").find(header)
@@ -222,10 +232,17 @@ object DapTestUtils {
         val contentLength = match.groupValues[1].toInt()
         val body = ByteArray(contentLength)
         var read = 0
-        while (read < contentLength) {
-            val n = input.read(body, read, contentLength - read)
-            if (n == -1) error("EOF reading DAP body (expected $contentLength, got $read)")
-            read += n
+        try {
+            while (read < contentLength) {
+                val n = input.read(body, read, contentLength - read)
+                if (n == -1) error("EOF reading DAP body (expected $contentLength bytes, got $read)")
+                read += n
+            }
+        } catch (e: java.net.SocketException) {
+            val partial = String(body, 0, read, StandardCharsets.UTF_8).take(200)
+            throw java.net.SocketException(
+                "Connection lost while reading DAP body ($read/$contentLength bytes read: \"$partial\"): ${e.message}"
+            ).initCause(e)
         }
         return String(body, StandardCharsets.UTF_8)
     }
@@ -285,20 +302,27 @@ object DapTestUtils {
      */
     fun readEventOfType(input: InputStream, eventType: String, maxMessages: Int = 50): String {
         val skipped = mutableListOf<String>()
-        repeat(maxMessages) {
-            val message = readDapMessage(input)
-            val json = JSONObject(message)
-            if (json.optString("type") == "event" && json.optString("event") == eventType) {
-                return message
+        try {
+            repeat(maxMessages) {
+                val message = readDapMessage(input)
+                val json = JSONObject(message)
+                if (json.optString("type") == "event" && json.optString("event") == eventType) {
+                    return message
+                }
+                // Summarize for diagnostics
+                val type = json.optString("type", "?")
+                val detail = when (type) {
+                    "event" -> "event:${json.optString("event")}"
+                    "response" -> "response:${json.optString("command")} success=${json.optBoolean("success")}"
+                    else -> type
+                }
+                skipped.add(detail)
             }
-            // Summarize for diagnostics
-            val type = json.optString("type", "?")
-            val detail = when (type) {
-                "event" -> "event:${json.optString("event")}"
-                "response" -> "response:${json.optString("command")} success=${json.optBoolean("success")}"
-                else -> type
-            }
-            skipped.add(detail)
+        } catch (e: Exception) {
+            throw IllegalStateException(
+                "Stream failed while waiting for '$eventType' event after ${skipped.size} messages. " +
+                "Messages seen so far: $skipped", e
+            )
         }
         error("No '$eventType' event within $maxMessages messages. Saw: $skipped")
     }

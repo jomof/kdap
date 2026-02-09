@@ -97,22 +97,27 @@ class DapInitializeTest {
     @EnumSource(ConnectionMode::class)
     fun `initialize receives valid response with capabilities`(mode: ConnectionMode) {
         mode.connect().use { ctx ->
-            val responseBody = DapTestUtils.sendInitializeAndReadResponse(ctx.inputStream, ctx.outputStream)
-            DapTestUtils.assertValidInitializeResponse(responseBody)
-            val actualCapabilities = DapTestUtils.parseInitializeCapabilities(responseBody)
-            val baseline = when (mode.serverKind) {
-                ServerKind.OUR_SERVER -> expectedOurCapabilitiesBaseline
-                ServerKind.LLDB_DAP -> expectedLldbDapInitializeCapabilitiesBaseline
-                ServerKind.CODELDB -> expectedCodeLldbInitializeCapabilitiesBaseline
-            }
-            // $__lldb_version is platform-specific: macOS/Linux include git revision
-            // details, Windows only returns "lldb version X.Y.Z". Exclude from strict
-            // comparison; the field is still in the baseline for documentation.
-            val diff = DapTestUtils.compareJsonStrict(
-                actualCapabilities, baseline, excludeKeys = setOf("\$__lldb_version")
-            )
-            Assertions.assertTrue(diff == null) {
-                "Initialize capabilities differ from baseline ($mode):\n$diff\n\nActual capabilities:\n${actualCapabilities.toString(2)}"
+            try {
+                val responseBody = DapTestUtils.sendInitializeAndReadResponse(ctx.inputStream, ctx.outputStream)
+                DapTestUtils.assertValidInitializeResponse(responseBody)
+                val actualCapabilities = DapTestUtils.parseInitializeCapabilities(responseBody)
+                val baseline = when (mode.serverKind) {
+                    ServerKind.OUR_SERVER -> expectedOurCapabilitiesBaseline
+                    ServerKind.LLDB_DAP -> expectedLldbDapInitializeCapabilitiesBaseline
+                    ServerKind.CODELDB -> expectedCodeLldbInitializeCapabilitiesBaseline
+                }
+                // $__lldb_version is platform-specific: macOS/Linux include git revision
+                // details, Windows only returns "lldb version X.Y.Z". Exclude from strict
+                // comparison; the field is still in the baseline for documentation.
+                val diff = DapTestUtils.compareJsonStrict(
+                    actualCapabilities, baseline, excludeKeys = setOf("\$__lldb_version")
+                )
+                Assertions.assertTrue(diff == null) {
+                    "Initialize capabilities differ from baseline ($mode):\n$diff\n\nActual capabilities:\n${actualCapabilities.toString(2)}"
+                }
+            } catch (e: Exception) {
+                val diag = try { ctx.diagnostics() } catch (_: Exception) { "(diagnostics unavailable)" }
+                throw AssertionError("[$mode] Failed during initialize\n$diag", e)
             }
         }
     }
@@ -122,9 +127,14 @@ class DapInitializeTest {
     @MethodSource("com.github.jomof.ConnectionMode#ourServerModes")
     fun `triggerError request receives expected error response`(mode: ConnectionMode) {
         mode.connect().use { ctx ->
-            DapTestUtils.sendTriggerErrorRequest(ctx.outputStream)
-            val responseBody = DapTestUtils.readResponseBody(ctx.inputStream)
-            DapTestUtils.assertInternalErrorResponse(responseBody)
+            try {
+                DapTestUtils.sendTriggerErrorRequest(ctx.outputStream)
+                val responseBody = DapTestUtils.readResponseBody(ctx.inputStream)
+                DapTestUtils.assertInternalErrorResponse(responseBody)
+            } catch (e: Exception) {
+                val diag = try { ctx.diagnostics() } catch (_: Exception) { "(diagnostics unavailable)" }
+                throw AssertionError("[$mode] Failed during triggerError test\n$diag", e)
+            }
         }
     }
 }

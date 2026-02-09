@@ -114,10 +114,10 @@ private fun ConnectionMode.label(): String {
         ServerKind.CODELDB   -> "codelldb"
     }
     val transport = when (this) {
-        ConnectionMode.STDIO, ConnectionMode.STDIO_CODELDB -> "stdio"
+        ConnectionMode.STDIO, ConnectionMode.STDIO_LLDB, ConnectionMode.STDIO_CODELDB -> "stdio"
         ConnectionMode.TCP_LISTEN   -> "tcp-listen"
         ConnectionMode.TCP_CONNECT  -> "tcp-connect"
-        ConnectionMode.TCP_LLDB, ConnectionMode.TCP_CODELDB -> "tcp"
+        ConnectionMode.TCP_CODELDB  -> "tcp"
         ConnectionMode.IN_PROCESS   -> "in-process/tcp"
     }
     return "$product ($transport)"
@@ -227,15 +227,15 @@ private fun printReport(results: List<ModeResult>, n: Int, console: PrintStream)
         )
     }
 
-    // Overhead vs lldb-dap (tcp) baseline
-    val baseline = results.find { it.mode == ConnectionMode.TCP_LLDB && it.error == null }
+    // Overhead vs lldb-dap (stdio) baseline
+    val baseline = results.find { it.mode == ConnectionMode.STDIO_LLDB && it.error == null }
     if (baseline != null && baseline.latencies.isNotEmpty()) {
         val baseAvg = baseline.latencies.average()
         log("")
-        log("Overhead vs lldb-dap (tcp) — direct, no proxy:")
+        log("Overhead vs lldb-dap (stdio) — direct, no proxy:")
         for (r in results) {
             if (r.error != null || r.latencies.isEmpty()) continue
-            if (r.mode == ConnectionMode.TCP_LLDB) continue
+            if (r.mode == ConnectionMode.STDIO_LLDB) continue
             val label = r.mode.label()
             val avg = r.latencies.average()
             val overhead = avg - baseAvg

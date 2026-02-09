@@ -2,7 +2,7 @@
 # Run tests inside a Linux Docker container matching GitHub CI (Ubuntu + JDK 21).
 # Uses --platform linux/amd64 so the container is x86_64 and finds prebuilts/lldb/linux-x64.
 # On an ARM Mac, without --platform Docker would use arm64 and the harness would look
-# for linux-arm64 (not present), so TCP_LLDB would fail.
+# for linux-arm64 (not present), so STDIO_LLDB would fail.
 #
 # Uses Ubuntu 22.04 so we get Python 3.10 and system libs (libxml2, libncurses6) that
 # the LLVM 21 lldb-dap binary needs at runtime. Then installs Temurin JDK 21.

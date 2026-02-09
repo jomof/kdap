@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit
  * stdin/stdout via [inputStream] and [outputStream].
  *
  * **TCP mode** (use [startTcp]): DAP messages flow over TCP; the process's
- * stdout and stderr are available for diagnostic capture.
+ * stdout and stderr are available via [inputStream] and [errorStream].
  *
  * Example:
  * ```
@@ -53,6 +53,21 @@ class LldbDapProcess private constructor(
      * Check [isAlive] first.
      */
     val exitValue: Int get() = process.exitValue()
+
+    /**
+     * Returns a human-readable summary of the lldb-dap process state:
+     * alive/exited status, PID, and exit code.
+     *
+     * This intentionally does **not** capture stderr — callers decide
+     * whether and how to buffer stderr (see [errorStream]).
+     */
+    fun diagnostics(): String = buildString {
+        if (isAlive) {
+            appendLine("lldb-dap: alive (pid $pid)")
+        } else {
+            appendLine("lldb-dap: exited with code $exitValue")
+        }
+    }
 
     /**
      * Gracefully stops the lldb-dap process. Waits up to 2 seconds for

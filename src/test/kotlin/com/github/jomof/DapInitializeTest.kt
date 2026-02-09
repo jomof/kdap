@@ -9,7 +9,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Tests that the DAP server responds to `initialize`. Runs for each connection mode
- * (our server: stdio, TCP listen, TCP connect, in-process; lldb-dap: TCP_LLDB; CodeLLDB: STDIO_CODELDB, TCP_CODELDB).
+ * (our server: stdio, TCP listen, TCP connect, in-process; lldb-dap: STDIO_LLDB; CodeLLDB: STDIO_CODELDB, TCP_CODELDB).
  *
  * Each server has a complete capabilities baseline below so the full response shape is
  * documented and structural differences between server types are immediately visible.

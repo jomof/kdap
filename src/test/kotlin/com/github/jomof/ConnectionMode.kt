@@ -1,12 +1,9 @@
 package com.github.jomof
 
-import com.github.jomof.dap.LldbDapProcess
 import java.io.BufferedInputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /**
@@ -32,57 +29,12 @@ private fun processDiagnostics(
     if (out.isNullOrEmpty() && err.isNullOrEmpty()) appendLine("  (no stdout/stderr captured)")
 }
 
-/** Builds a diagnostic string for a [LldbDapProcess] (delegates to [processDiagnostics]). */
-private fun processDiagnostics(
-    name: String,
-    lldbDap: LldbDapProcess,
-    stdout: StringBuilder? = null,
-    stderr: StringBuilder? = null,
-): String = buildString {
-    appendLine("$name diagnostics:")
-    if (lldbDap.isAlive) {
-        appendLine("  process: alive (pid ${lldbDap.pid})")
-    } else {
-        appendLine("  process: exited with code ${lldbDap.exitValue}")
-    }
-    val err = stderr?.toString()?.trim()?.takeLast(2000)
-    val out = stdout?.toString()?.trim()?.takeLast(2000)
-    if (!out.isNullOrEmpty()) appendLine("  stdout:\n    ${out.replace("\n", "\n    ")}")
-    if (!err.isNullOrEmpty()) appendLine("  stderr:\n    ${err.replace("\n", "\n    ")}")
-    if (out.isNullOrEmpty() && err.isNullOrEmpty()) appendLine("  (no stdout/stderr captured)")
+/** Formats captured stderr for appending to diagnostics (last 2000 chars). */
+private fun processDiagnosticStderr(stderr: StringBuilder): String {
+    val text = stderr.toString().trim().takeLast(2000)
+    return if (text.isNotEmpty()) "  stderr:\n    ${text.replace("\n", "\n    ")}\n" else ""
 }
 
-/** Runs shell commands to diagnose why a port never became reachable; returns combined output. */
-private fun runPortDiagnostics(port: Int, lldbDap: LldbDapProcess): String {
-    val out = StringBuilder()
-    fun run(vararg cmd: String) {
-        try {
-            val p = ProcessBuilder(*cmd).redirectErrorStream(true).start()
-            if (!p.waitFor(5, TimeUnit.SECONDS)) p.destroyForcibly()
-            out.append("$ ").append(cmd.joinToString(" ")).append("\n")
-            out.append(p.inputStream.bufferedReader(Charsets.UTF_8).readText().take(500))
-            if (out.lastOrNull() != '\n') out.append('\n')
-        } catch (e: Exception) {
-            out.append("(failed: ${e.message})\n")
-        }
-    }
-    val pid = if (lldbDap.isAlive) lldbDap.pid.toString() else "exited"
-    out.append("--- port=$port pid=$pid ---\n")
-    val os = System.getProperty("os.name").lowercase()
-    when {
-        os.contains("linux") -> {
-            run("ss", "-tlnp")
-            run("lsof", "-i", ":$port")
-            if (lldbDap.isAlive) run("ps", "-p", lldbDap.pid.toString(), "-o", "pid,state,etime,args")
-        }
-        os.contains("mac") || os.contains("darwin") -> {
-            run("lsof", "-i", ":$port")
-            if (lldbDap.isAlive) run("ps", "-p", lldbDap.pid.toString(), "-o", "pid,state,etime,command")
-        }
-        else -> run("netstat", "-an")
-    }
-    return out.toString()
-}
 
 /**
  * Test-level abstraction over behavioral differences between DAP server
@@ -260,74 +212,25 @@ enum class ConnectionMode(val serverKind: ServerKind) {
     },
 
     // ── lldb-dap direct (reference implementation, no KDAP in front) ─────
-    /** Connects to lldb-dap via TCP (-p port). Stdout and stderr captured on failure (keep for CI diagnostics). */
-    TCP_LLDB(ServerKind.LLDB_DAP) {
+    /** Connects to lldb-dap via stdio — the same transport KDAP uses in production. */
+    STDIO_LLDB(ServerKind.LLDB_DAP) {
         override fun connect(): ConnectionContext {
             if (!LldbDapHarness.isAvailable())
                 throw IllegalStateException("lldb-dap not available (run scripts/download-lldb.sh or set KDAP_LLDB_ROOT)")
-            val (lldbDap, port) = LldbDapHarness.startTcp()
-            val stdoutBuf = StringBuilder()
+            val lldbDap = LldbDapHarness.start()
             val stderrBuf = StringBuilder()
-            thread(isDaemon = true) {
-                lldbDap.inputStream.bufferedReader(Charsets.UTF_8).use { r ->
-                    r.lineSequence().forEach { stdoutBuf.appendLine(it) }
-                }
-            }
             thread(isDaemon = true) {
                 lldbDap.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
                     r.lineSequence().forEach { stderrBuf.appendLine(it) }
                 }
             }
-
-            // Handshake: instead of a fixed sleep, prove readiness by completing
-            // the DAP initialize exchange. If the connection resets (lldb-dap not
-            // ready yet), we close the socket and retry with a fresh one.
-            val deadline = System.currentTimeMillis() + 30_000
-            var lastError: Exception? = null
-            while (System.currentTimeMillis() < deadline) {
-                if (!lldbDap.isAlive) {
-                    val diag = processDiagnostics("lldb-dap", lldbDap, stdoutBuf, stderrBuf)
-                    throw IllegalStateException(
-                        "lldb-dap exited with code ${lldbDap.exitValue} before handshake completed\n$diag"
-                    )
-                }
-                val socket = try {
-                    java.net.Socket("127.0.0.1", port).apply { soTimeout = 5_000 }
-                } catch (_: Exception) {
-                    Thread.sleep(50)
-                    continue
-                }
-                try {
-                    val buffered = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
-                    DapTestUtils.sendInitializeRequest(socket.getOutputStream())
-                    val response = DapTestUtils.readDapMessage(buffered)
-                    DapTestUtils.assertValidInitializeResponse(response)
-                    // Handshake succeeded — server is genuinely ready for DAP traffic.
-                    return object : ConnectionContext {
-                        override val inputStream: InputStream = buffered
-                        override val outputStream: OutputStream = socket.getOutputStream()
-                        override val initializeResponse: String = response
-                        override fun diagnostics(): String =
-                            processDiagnostics("lldb-dap", lldbDap, stdoutBuf, stderrBuf)
-                        override fun close() {
-                            socket.close()
-                            lldbDap.close()
-                        }
-                    }
-                } catch (e: Exception) {
-                    lastError = e
-                    socket.close()
-                    Thread.sleep(100)
-                }
+            return object : ConnectionContext {
+                override val inputStream: InputStream = TimeoutInputStream(BufferedInputStream(lldbDap.inputStream, DAP_READ_BUFFER_SIZE))
+                override val outputStream: OutputStream = lldbDap.outputStream
+                override fun diagnostics(): String =
+                    lldbDap.diagnostics() + processDiagnosticStderr(stderrBuf)
+                override fun close() = lldbDap.close()
             }
-            // Timeout — build a rich error with all available diagnostics.
-            val diag = processDiagnostics("lldb-dap", lldbDap, stdoutBuf, stderrBuf)
-            val portDiag = runPortDiagnostics(port, lldbDap)
-            lldbDap.close()
-            throw IllegalStateException(
-                "lldb-dap did not become ready within 30s (port $port)\n$diag\nPort diagnostics:\n$portDiag",
-                lastError
-            )
         }
     },
 
@@ -387,11 +290,11 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             ServerKind.CODELDB   -> "codelldb"
         }
         val transport = when (this) {
-            STDIO, STDIO_CODELDB       -> "stdio"
-            TCP_LISTEN                 -> "tcp-listen"
-            TCP_CONNECT                -> "tcp-connect"
-            TCP_LLDB, TCP_CODELDB      -> "tcp"
-            IN_PROCESS                 -> "in-process/tcp"
+            STDIO, STDIO_LLDB, STDIO_CODELDB -> "stdio"
+            TCP_LISTEN                       -> "tcp-listen"
+            TCP_CONNECT                      -> "tcp-connect"
+            TCP_CODELDB                      -> "tcp"
+            IN_PROCESS                       -> "in-process/tcp"
         }
         return "$product ($transport)"
     }

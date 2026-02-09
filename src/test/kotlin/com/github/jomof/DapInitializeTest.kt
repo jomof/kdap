@@ -105,7 +105,12 @@ class DapInitializeTest {
                 ServerKind.LLDB_DAP -> expectedLldbDapInitializeCapabilitiesBaseline
                 ServerKind.CODELDB -> expectedCodeLldbInitializeCapabilitiesBaseline
             }
-            val diff = DapTestUtils.compareJsonStrict(actualCapabilities, baseline)
+            // $__lldb_version is platform-specific: macOS/Linux include git revision
+            // details, Windows only returns "lldb version X.Y.Z". Exclude from strict
+            // comparison; the field is still in the baseline for documentation.
+            val diff = DapTestUtils.compareJsonStrict(
+                actualCapabilities, baseline, excludeKeys = setOf("\$__lldb_version")
+            )
             Assertions.assertTrue(diff == null) {
                 "Initialize capabilities differ from baseline ($mode):\n$diff\n\nActual capabilities:\n${actualCapabilities.toString(2)}"
             }

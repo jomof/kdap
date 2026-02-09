@@ -308,6 +308,23 @@ enum class ConnectionMode(val serverKind: ServerKind) {
 
     abstract fun connect(): ConnectionContext
 
+    /** e.g. "kdap (stdio)", "lldb-dap (tcp)", "codelldb (stdio)" — matches [CompareOverhead] labels. */
+    override fun toString(): String {
+        val product = when (serverKind) {
+            ServerKind.OUR_SERVER -> "kdap"
+            ServerKind.LLDB_DAP  -> "lldb-dap"
+            ServerKind.CODELDB   -> "codelldb"
+        }
+        val transport = when (this) {
+            STDIO, STDIO_CODELDB       -> "stdio"
+            TCP_LISTEN                 -> "tcp-listen"
+            TCP_CONNECT                -> "tcp-connect"
+            TCP_LLDB, TCP_CODELDB      -> "tcp"
+            IN_PROCESS                 -> "in-process/tcp"
+        }
+        return "$product ($transport)"
+    }
+
     companion object {
         /** Modes that run our KDAP server (excludes lldb-dap, codelldb). For parameterized tests that only target our server. */
         @JvmStatic

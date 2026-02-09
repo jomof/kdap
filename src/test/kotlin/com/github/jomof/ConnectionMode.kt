@@ -176,40 +176,32 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             }
         }
     },
-    /** Runs KDAP in-process by calling [main] directly with redirected System.in/out. */
+    /**
+     * Runs KDAP in-process by calling [main] directly in a thread, using TCP
+     * (--port) instead of stdio. This avoids System.in/out redirection entirely.
+     */
     IN_PROCESS(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
             val lldbDapPath = LldbDapHarness.resolveLldbDapPath()
                 ?: error("lldb-dap not found (run scripts/download-lldb.sh or set KDAP_LLDB_ROOT)")
-            val originalIn = System.`in`
-            val originalOut = System.out
-            val serverInput = java.io.PipedInputStream()
-            val testToServer = java.io.PipedOutputStream(serverInput)
-            val serverToClient = java.io.PipedOutputStream()
-            val testFromServer = java.io.PipedInputStream(serverToClient)
-            System.setIn(serverInput)
-            System.setOut(java.io.PrintStream(serverToClient, /* autoFlush = */ true))
+            val port = java.net.ServerSocket(0).use { it.localPort }
             val serverError = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
-            val serverReady = CountDownLatch(1)
-            val serverThread = thread {
-                serverReady.countDown()
+            val serverThread = thread(name = "kdap-in-process") {
                 try {
-                    main(arrayOf("--lldb-dap", lldbDapPath.absolutePath))
+                    mainImpl(arrayOf("--port", port.toString(), "--lldb-dap", lldbDapPath.absolutePath))
                 } catch (e: Throwable) {
                     serverError.set(e)
                     System.err.println("[KDAP IN_PROCESS] main() threw: $e")
                     e.printStackTrace(System.err)
                 }
             }
-            serverReady.await()
+            val socket = TcpTestUtils.connectToPort(port, 10_000).apply { soTimeout = 10_000 }
             return object : ConnectionContext {
-                override val inputStream: InputStream = testFromServer
-                override val outputStream: OutputStream = testToServer
+                override val inputStream: InputStream = socket.getInputStream()
+                override val outputStream: OutputStream = socket.getOutputStream()
                 override fun close() {
-                    testToServer.close()
+                    socket.close()
                     serverThread.join(5000)
-                    System.setIn(originalIn)
-                    System.setOut(originalOut)
                     serverError.get()?.let { err ->
                         System.err.println("[KDAP IN_PROCESS] Server thread failed: $err")
                     }

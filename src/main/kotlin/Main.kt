@@ -11,7 +11,13 @@ import java.io.File
  * matching CodeLLDB's command line. `--lldb-dap <path>` is required to specify
  * the `lldb-dap` executable.
  */
-fun main(args: Array<String>) {
+fun main(args: Array<String>) = mainImpl(args)
+
+/**
+ * Implementation extracted so tests (e.g. IN_PROCESS) can call it by name
+ * without ambiguity when the test file also defines a top-level `main`.
+ */
+fun mainImpl(args: Array<String>) {
     val config = Cli.parse(args)
     if (config == null) {
         System.err.println("Usage: [--port N] | [--connect N] [--lldb-dap PATH]")

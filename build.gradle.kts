@@ -21,6 +21,18 @@ kotlin {
     jvmToolchain(25)
 }
 
+tasks.register<JavaExec>("benchmark") {
+    description = "Runs the KDAP proxy overhead benchmark"
+    group = "verification"
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set(project.findProperty("mainClass")?.toString() ?: "com.github.jomof.CompareOverheadKt")
+    // Pass -n via Gradle property: ./gradlew benchmark -Pn=200
+    val nArg = project.findProperty("n")?.toString()
+    args = buildList {
+        if (nArg != null) { add("-n"); add(nArg) }
+    }
+}
+
 tasks.test {
     useJUnitPlatform()
     testLogging {

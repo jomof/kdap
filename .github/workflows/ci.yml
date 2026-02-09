@@ -87,27 +87,5 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Verify lldb-dap
-        env:
-          PLATFORM_ID: ${{ matrix.platform_id }}
-        run: |
-          EXE="prebuilts/lldb/$PLATFORM_ID/bin/lldb-dap"
-          [[ "$PLATFORM_ID" == win32-* ]] && EXE="${EXE}.exe"
-          echo "Checking: $EXE"
-          ls -la "$EXE" || { echo "lldb-dap not found!"; exit 1; }
-
-          if [[ "$PLATFORM_ID" == win32-* ]]; then
-            echo "--- DLLs in bin/ ---"
-            ls "prebuilts/lldb/$PLATFORM_ID/bin/"*.dll 2>/dev/null | head -30 || echo "(none)"
-            echo "--- Python on PATH ---"
-            python --version 2>&1 || echo "(python not found)"
-            echo "--- Checking DLL dependencies ---"
-            python scripts/check-dll-deps.py "prebuilts/lldb/$PLATFORM_ID/bin" 2>&1 || true
-          fi
-
-          echo "--- lldb-dap --version ---"
-          "$EXE" --version 2>&1
-          echo "lldb-dap verified successfully"
-
       - name: Run tests
         run: ./gradlew test

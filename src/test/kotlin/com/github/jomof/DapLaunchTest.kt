@@ -70,10 +70,12 @@ class DapLaunchTest {
         var phase = "setup"
 
         try {
-            // 1. Initialize
+            // 1. Initialize (may already be done as a connection handshake)
             phase = "initialize (sending request and reading response)"
-            DapTestUtils.sendInitializeRequest(output)
-            val initResponse = DapTestUtils.readDapMessage(input)
+            val initResponse = ctx.initializeResponse ?: run {
+                DapTestUtils.sendInitializeRequest(output)
+                DapTestUtils.readDapMessage(input)
+            }
             DapTestUtils.assertValidInitializeResponse(initResponse)
 
             // 2. Launch (server-specific format)

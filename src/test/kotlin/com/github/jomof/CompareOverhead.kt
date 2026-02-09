@@ -132,7 +132,7 @@ private fun ConnectionMode.label(): String {
  */
 private fun benchmark(mode: ConnectionMode, n: Int): ModeResult {
     mode.connect().use { ctx ->
-        initializeSession(ctx.inputStream, ctx.outputStream, mode)
+        initializeSession(ctx, mode)
 
         // Warmup (sequential, not measured)
         repeat(5) { seq ->
@@ -279,9 +279,11 @@ private fun percentile(sorted: List<Double>, p: Int): Double {
 
 // ─── DAP helpers ─────────────────────────────────────────────────────────
 
-private fun initializeSession(input: InputStream, output: OutputStream, mode: ConnectionMode) {
-    DapTestUtils.sendInitializeRequest(output)
-    val response = DapTestUtils.readDapMessage(input)
+private fun initializeSession(ctx: ConnectionContext, mode: ConnectionMode) {
+    val response = ctx.initializeResponse ?: run {
+        DapTestUtils.sendInitializeRequest(ctx.outputStream)
+        DapTestUtils.readDapMessage(ctx.inputStream)
+    }
     val json = JSONObject(response)
     check(json.optBoolean("success", false)) {
         "Initialize failed for $mode: $response"

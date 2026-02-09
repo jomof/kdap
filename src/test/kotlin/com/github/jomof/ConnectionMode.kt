@@ -277,36 +277,55 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                     r.lineSequence().forEach { stderrBuf.appendLine(it) }
                 }
             }
-            return try {
-                val socket = TcpTestUtils.connectToPort(port, 120_000).apply { soTimeout = 15_000 }
-                // lldb-dap's TCP mode has a race: the OS accept-backlog accepts our
-                // connection before the application is ready for DAP traffic. A brief
-                // pause lets lldb-dap finish initializing after accept().
-                Thread.sleep(200)
-                object : ConnectionContext {
-                    override val inputStream: InputStream = socket.getInputStream()
-                    override val outputStream: OutputStream = socket.getOutputStream()
-                    override fun diagnostics(): String = processDiagnostics("lldb-dap", lldbDap, stdoutBuf, stderrBuf)
-                    override fun close() {
-                        socket.close()
-                        lldbDap.close()
-                    }
+
+            // Handshake: instead of a fixed sleep, prove readiness by completing
+            // the DAP initialize exchange. If the connection resets (lldb-dap not
+            // ready yet), we close the socket and retry with a fresh one.
+            val deadline = System.currentTimeMillis() + 30_000
+            var lastError: Exception? = null
+            while (System.currentTimeMillis() < deadline) {
+                if (!lldbDap.isAlive) {
+                    val diag = processDiagnostics("lldb-dap", lldbDap, stdoutBuf, stderrBuf)
+                    throw IllegalStateException(
+                        "lldb-dap exited with code ${lldbDap.exitValue} before handshake completed\n$diag"
+                    )
                 }
-            } catch (e: IllegalStateException) {
-                val diagnostics = runPortDiagnostics(port, lldbDap)
-                lldbDap.close()
-                val exitInfo = if (!lldbDap.isAlive) " (lldb-dap exited with ${lldbDap.exitValue})" else ""
-                val out = stdoutBuf.toString().trim().takeLast(2000).ifEmpty { "(no stdout)" }
-                val err = stderrBuf.toString().trim().takeLast(2000).ifEmpty { "(no stderr)" }
-                val emptyNote = if (out == "(no stdout)" && err == "(no stderr)")
-                    "\n(Empty stdout/stderr is common: lldb-dap redirects them after startup.)"
-                else ""
-                val portNote = "\n(If Diagnostics show process running but port not in ss -tlnp, lldb-dap is stuck in init before bind.)"
-                throw IllegalStateException(
-                    "${e.message}$exitInfo$emptyNote$portNote\nlldb-dap stdout:\n$out\nlldb-dap stderr:\n$err\nDiagnostics:\n$diagnostics",
-                    e
-                )
+                val socket = try {
+                    java.net.Socket("127.0.0.1", port).apply { soTimeout = 5_000 }
+                } catch (_: Exception) {
+                    Thread.sleep(50)
+                    continue
+                }
+                try {
+                    DapTestUtils.sendInitializeRequest(socket.getOutputStream())
+                    val response = DapTestUtils.readDapMessage(socket.getInputStream())
+                    DapTestUtils.assertValidInitializeResponse(response)
+                    // Handshake succeeded — server is genuinely ready for DAP traffic.
+                    return object : ConnectionContext {
+                        override val inputStream: InputStream = socket.getInputStream()
+                        override val outputStream: OutputStream = socket.getOutputStream()
+                        override val initializeResponse: String = response
+                        override fun diagnostics(): String =
+                            processDiagnostics("lldb-dap", lldbDap, stdoutBuf, stderrBuf)
+                        override fun close() {
+                            socket.close()
+                            lldbDap.close()
+                        }
+                    }
+                } catch (e: Exception) {
+                    lastError = e
+                    socket.close()
+                    Thread.sleep(100)
+                }
             }
+            // Timeout — build a rich error with all available diagnostics.
+            val diag = processDiagnostics("lldb-dap", lldbDap, stdoutBuf, stderrBuf)
+            val portDiag = runPortDiagnostics(port, lldbDap)
+            lldbDap.close()
+            throw IllegalStateException(
+                "lldb-dap did not become ready within 30s (port $port)\n$diag\nPort diagnostics:\n$portDiag",
+                lastError
+            )
         }
     },
 
@@ -393,6 +412,14 @@ enum class ConnectionMode(val serverKind: ServerKind) {
 interface ConnectionContext : AutoCloseable {
     val inputStream: InputStream
     val outputStream: OutputStream
+
+    /**
+     * If non-null, the DAP `initialize` exchange was already completed during
+     * [ConnectionMode.connect] as a readiness handshake. The value is the raw
+     * JSON response body. Tests should use this cached response instead of
+     * sending a redundant initialize request.
+     */
+    val initializeResponse: String? get() = null
 
     /**
      * Returns a human-readable summary of the server's state for failure

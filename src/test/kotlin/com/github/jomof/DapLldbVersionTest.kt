@@ -66,9 +66,11 @@ class DapLldbVersionTest {
     @EnumSource(ConnectionMode::class)
     fun `evaluate version command returns lldb version string`(mode: ConnectionMode) {
         mode.connect().use { ctx ->
-            // 1. Initialize the DAP session (adapter loads liblldb during startup)
-            DapTestUtils.sendInitializeRequest(ctx.outputStream)
-            val initResponse = DapTestUtils.readDapMessage(ctx.inputStream)
+            // 1. Initialize the DAP session (may already be done as a connection handshake)
+            val initResponse = ctx.initializeResponse ?: run {
+                DapTestUtils.sendInitializeRequest(ctx.outputStream)
+                DapTestUtils.readDapMessage(ctx.inputStream)
+            }
             DapTestUtils.assertValidInitializeResponse(initResponse)
 
             // 2. Run "version" through the LLDB command interpreter (no launch needed).

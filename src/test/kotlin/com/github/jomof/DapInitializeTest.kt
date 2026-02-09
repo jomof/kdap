@@ -98,7 +98,9 @@ class DapInitializeTest {
     fun `initialize receives valid response with capabilities`(mode: ConnectionMode) {
         mode.connect().use { ctx ->
             try {
-                val responseBody = DapTestUtils.sendInitializeAndReadResponse(ctx.inputStream, ctx.outputStream)
+                // Use cached handshake response if the connection already completed initialize
+                val responseBody = ctx.initializeResponse
+                    ?: DapTestUtils.sendInitializeAndReadResponse(ctx.inputStream, ctx.outputStream)
                 DapTestUtils.assertValidInitializeResponse(responseBody)
                 val actualCapabilities = DapTestUtils.parseInitializeCapabilities(responseBody)
                 val baseline = when (mode.serverKind) {

@@ -20,17 +20,22 @@ class TransportTest {
 
     @Test
     fun `TcpListen run invokes block with accepted socket streams`() {
-        val freePort = ServerSocket(0).use { it.localPort }
+        val portReady = CountDownLatch(1)
+        var boundPort = 0
         val blockRan = CountDownLatch(1)
         val received = ByteArray(2)
         val serverThread = thread {
-            Transport.TcpListen(freePort).run { input, output ->
+            Transport.TcpListen(0, onBound = { port ->
+                boundPort = port
+                portReady.countDown()
+            }).run { _, output ->
                 output.write("ok".toByteArray())
                 output.flush()
                 blockRan.countDown()
             }
         }
-        val client = connectWithRetry("127.0.0.1", freePort)
+        portReady.await()
+        val client = Socket("127.0.0.1", boundPort)
         client.use {
             it.soTimeout = 5000
             it.getInputStream().read(received)
@@ -38,18 +43,6 @@ class TransportTest {
         blockRan.await()
         serverThread.join(2000)
         assertArrayEquals("ok".toByteArray(), received)
-    }
-
-    private fun connectWithRetry(host: String, port: Int, timeoutMs: Long = 5000): Socket {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            try {
-                return Socket(host, port)
-            } catch (_: Exception) {
-                Thread.sleep(20)
-            }
-        }
-        error("Could not connect to $host:$port within ${timeoutMs}ms")
     }
 
     @Test

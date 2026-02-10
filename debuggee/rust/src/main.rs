@@ -22,6 +22,15 @@ fn main() {
         Some("sleep") => {
             std::thread::sleep(std::time::Duration::from_secs(10));
         }
+        Some("inf_loop") => {
+            let mut i: i64 = 0;
+            loop {
+                print!("\r{} ", i);
+                std::io::Write::flush(&mut std::io::stdout()).unwrap();
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                i += 1;
+            }
+        }
         Some(_) => {
             primitives();
             enums();

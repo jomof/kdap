@@ -369,6 +369,55 @@ object DapTestUtils {
         sendRequest(output, json.toString())
     }
 
+    /**
+     * Sends a DAP `attach` request.
+     *
+     * @param pid the OS process ID of the running debuggee to attach to.
+     * @param program path to the debuggee binary (used by the adapter to
+     *   create the debug target / locate symbols).
+     * @param extraArgs additional arguments merged into the `arguments` object
+     *   (e.g. `"stopOnEntry"` to `true`).
+     */
+    fun sendAttachRequest(
+        output: OutputStream,
+        seq: Int,
+        pid: Long,
+        program: String,
+        extraArgs: Map<String, Any> = mapOf("stopOnEntry" to true),
+    ) {
+        val args = JSONObject().apply {
+            put("pid", pid)
+            put("program", program)
+            for ((k, v) in extraArgs) put(k, v)
+        }
+        val json = JSONObject().apply {
+            put("type", "request")
+            put("seq", seq)
+            put("command", "attach")
+            put("arguments", args)
+        }
+        sendRequest(output, json.toString())
+    }
+
+    /**
+     * Sends a DAP `disconnect` request.
+     *
+     * @param terminateDebuggee when false (default for attach), the debuggee
+     *   continues running after detach. When true, the adapter kills the process.
+     */
+    fun sendDisconnectRequest(output: OutputStream, seq: Int, terminateDebuggee: Boolean = false) {
+        val args = JSONObject().apply {
+            put("terminateDebuggee", terminateDebuggee)
+        }
+        val json = JSONObject().apply {
+            put("type", "request")
+            put("seq", seq)
+            put("command", "disconnect")
+            put("arguments", args)
+        }
+        sendRequest(output, json.toString())
+    }
+
     /** Sends a DAP `configurationDone` request. */
     fun sendConfigurationDoneRequest(output: OutputStream, seq: Int) {
         val json = JSONObject().apply {

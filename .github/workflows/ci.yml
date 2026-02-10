@@ -11,7 +11,7 @@ on:
 
 env:
   LLVM_VERSION: "21"           # major version for apt / brew
-  LLVM_VERSION_FULL: "21.1.8"  # exact version for choco
+  LLVM_VERSION_FULL: "21.1.8"  # exact version for GitHub release tarball (Windows)
 
 jobs:
   build:
@@ -73,8 +73,7 @@ jobs:
           echo "--- Verify ---"
           lldb-install/darwin-arm64/bin/lldb --version
 
-      # The LLVM 21.1.8 Windows installer ships liblldb.dll linked against
-      # python310.dll.  Install the matching Python so the DLL can be loaded.
+      # lldb-dap.exe (from the LLVM release tarball) links against python310.dll.
       - name: Set up Python 3.10 (Windows)
         if: runner.os == 'Windows'
         uses: actions/setup-python@v5
@@ -84,17 +83,17 @@ jobs:
       - name: Install LLDB (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install llvm --version=$LLVM_VERSION_FULL --yes
-          LLVM_DIR="/c/Program Files/LLVM"
+          ARCHIVE="clang+llvm-${LLVM_VERSION_FULL}-x86_64-pc-windows-msvc.tar.xz"
+          URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION_FULL}/${ARCHIVE}"
+          echo "Downloading $URL ..."
+          curl -fSL --connect-timeout 60 --max-time 600 -o "$ARCHIVE" "$URL"
           mkdir -p lldb-install/win32-x64
-          # Copy the directory tree (Windows junctions are unreliable in Git Bash)
-          cp -r "$LLVM_DIR/bin" lldb-install/win32-x64/bin
-          cp -r "$LLVM_DIR/lib" lldb-install/win32-x64/lib 2>/dev/null || true
+          echo "Extracting ..."
+          tar -xJf "$ARCHIVE" -C lldb-install/win32-x64 --strip-components=1
           echo "--- Verify ---"
           ls lldb-install/win32-x64/bin/lldb.exe \
              lldb-install/win32-x64/bin/lldb-dap.exe \
-             lldb-install/win32-x64/bin/lldb-server.exe \
-             lldb-install/win32-x64/bin/liblldb.dll
+             lldb-install/win32-x64/bin/lldb-server.exe
 
       # Compile Kotlin, download CodeLLDB, and build debuggee in parallel.
       - name: Compile, download CodeLLDB, and build debuggee in parallel
@@ -110,32 +109,6 @@ jobs:
           wait $GRADLE_PID
           wait $VSIX_PID
           wait $DEBUGGEE_PID
-
-      - name: Diagnose debuggee (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          echo "--- Debuggee binaries ---"
-          ls -la debuggee/build/Debug/debuggee*.exe debuggee/build/debuggee*.exe 2>/dev/null || true
-          ls -la debuggee/build/Debug/*.dll debuggee/build/*.dll 2>/dev/null || true
-          ls -la debuggee/build/rust-debuggee.exe debuggee/build/Debug/rust-debuggee.exe 2>/dev/null || true
-          echo "--- DLL dependencies of debuggee ---"
-          BIN="lldb-install/win32-x64/bin"
-          for f in debuggee/build/Debug/debuggee.exe debuggee/build/debuggee.exe; do
-            if [ -f "$f" ]; then
-              echo "=== $f ==="
-              "$BIN/llvm-objdump.exe" -p "$f" | grep "DLL Name" || true
-              echo "--- Running: $f stdio ---"
-              "$f" stdio 2>&1 && echo "exit: $?" || echo "exit: $?"
-            fi
-          done
-          for f in debuggee/build/rust-debuggee.exe debuggee/build/Debug/rust-debuggee.exe; do
-            if [ -f "$f" ]; then
-              echo "=== $f ==="
-              "$BIN/llvm-objdump.exe" -p "$f" | grep "DLL Name" || true
-              echo "--- Running: $f stdio ---"
-              "$f" stdio 2>&1 && echo "exit: $?" || echo "exit: $?"
-            fi
-          done
 
       # macOS 14+ (Sonoma): debuggers need task_for_pid, which requires the
       # *debuggee* to have com.apple.security.get-task-allow.  Without it,

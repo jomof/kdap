@@ -77,13 +77,19 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           choco install llvm --version=$LLVM_VERSION_FULL --yes
-          mkdir -p lldb-install/win32-x64
           LLVM_DIR="/c/Program Files/LLVM"
+          echo "--- LLVM install contents ---"
+          ls "$LLVM_DIR/bin/"*lldb* "$LLVM_DIR/bin/"*dap* 2>/dev/null \
+            || echo "WARNING: no lldb/dap binaries found in $LLVM_DIR/bin/"
+          mkdir -p lldb-install/win32-x64
           # Copy the directory tree (Windows junctions are unreliable in Git Bash)
           cp -r "$LLVM_DIR/bin" lldb-install/win32-x64/bin
           cp -r "$LLVM_DIR/lib" lldb-install/win32-x64/lib 2>/dev/null || true
           echo "--- Verify ---"
-          lldb-install/win32-x64/bin/lldb --version
+          ls lldb-install/win32-x64/bin/lldb* lldb-install/win32-x64/bin/*dap* 2>/dev/null \
+            || echo "WARNING: no lldb binaries after copy"
+          lldb-install/win32-x64/bin/lldb --version || true
+          lldb-install/win32-x64/bin/lldb-dap --version || true
 
       - name: Set up Python (Windows)
         if: runner.os == 'Windows'

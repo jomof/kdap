@@ -1,11 +1,14 @@
 package com.github.jomof
 
 import com.github.jomof.dap.messages.*
+import org.json.JSONObject
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.Socket
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 
 /**
@@ -207,12 +210,13 @@ class DapLaunchSequenceTest {
      * "integrated"` or `"external"`).
      *
      * Differences from [expectedLaunchSequence] (console mode):
-     * - CodeLLDB sends a `runInTerminal` reverse request before events.
-     *   KDAP/lldb-dap ignores the `terminal` parameter, so no reverse
-     *   request is sent — the entry is tagged [codelldbOnly].
-     * - In a headless test environment `codelldb-launch` has no TTY, so
-     *   CodeLLDB receives `terminalId: null` and skips stdio redirection.
-     *   All remaining events are identical to console mode.
+     * - Both servers send a `runInTerminal` reverse request after
+     *   `initialized` so the client can open a terminal. KDAP runs
+     *   `kdap-launch` (Java helper in the same JAR) while CodeLLDB
+     *   runs `codelldb-launch` (native binary).
+     * - In a headless test environment neither helper has a TTY, so
+     *   both servers skip stdio redirection. All remaining events are
+     *   identical to console mode.
      */
     private fun expectedTerminalLaunchSequence(kind: String) = listOf(
         // ── Initialize phase ─────────────────────────────────────────
@@ -220,6 +224,25 @@ class DapLaunchSequenceTest {
             "initialize response", both,
             command = "initialize",
             skip = setOf("body"),
+        ),
+
+        // ── runInTerminal (KDAP) ─────────────────────────────────────
+        // KDAP sends runInTerminal immediately when the launch request
+        // is received, before the backend's initialized event arrives.
+        // The async handler runs concurrently with the backend reader.
+        //
+        // KDAP args: [java, -cp, classpath, KdapLaunchKt, --connect=HOST:PORT]
+        ExpectedRequest(
+            "runInTerminal ($kind)", kdapOnly,
+            request = RunInTerminalRequest(
+                seq = 0,
+                kind = kind,
+                title = "KDAP Debug",
+                args = listOf("<java>", "-cp", "<classpath>", "KdapLaunchKt", "--connect=127.0.0.1:<port>"),
+            ),
+            regex = mapOf(
+                "args" to Regex("""\["[^"]+","-cp","[^"]+","com\.github\.jomof\.KdapLaunchKt","--connect=127\.0\.0\.1:\d+"]"""),
+            ),
         ),
 
         // ── Launch phase ─────────────────────────────────────────────
@@ -235,15 +258,11 @@ class DapLaunchSequenceTest {
             event = InitializedEvent(seq = 0),
         ),
 
-        // ── runInTerminal (CodeLLDB only) ────────────────────────────
-        // CodeLLDB sends this reverse request after initialized so the
-        // client can open a terminal and run codelldb-launch. lldb-dap
-        // ignores the terminal parameter, so KDAP never sees this.
-        // TODO: implement runInTerminal support in KDAP to align with CodeLLDB
+        // ── runInTerminal (CodeLLDB) ─────────────────────────────────
+        // CodeLLDB sends runInTerminal after initialized, once the
+        // launch has been processed sequentially.
         //
-        // args[0] = path to codelldb-launch (dynamic path)
-        // args[1] = --connect=127.0.0.1:<port> (dynamic port)
-        // args[2] = --clear-screen (static)
+        // CodeLLDB args: [codelldb-launch, --connect=HOST:PORT, --clear-screen]
         ExpectedRequest(
             "runInTerminal ($kind)", codelldbOnly,
             request = RunInTerminalRequest(
@@ -256,9 +275,6 @@ class DapLaunchSequenceTest {
                     "--clear-screen",
                 ),
             ),
-            // args is a JSON array — regex matches its stringified form.
-            // kind and title are exact-matched by structural comparison.
-            // Path separator and .exe extension vary by platform.
             regex = mapOf(
                 "args" to Regex("""\[".+[/\\]codelldb-launch[^"]*","--connect=127\.0\.0\.1:\d+","--clear-screen"]"""),
             ),
@@ -530,27 +546,62 @@ class DapLaunchSequenceTest {
     }
 
     /**
-     * Handles a `runInTerminal` reverse request by executing the command and
-     * sending a success response back to the adapter.
+     * Handles a `runInTerminal` reverse request.
      *
-     * The adapter (CodeLLDB) provides the full command in [request.args],
-     * typically `["/path/to/codelldb-launch", "--connect=HOST:PORT", ...]`.
-     * `codelldb-launch` connects back to the adapter via TCP and reports
-     * terminal device info. In a headless environment (no TTY), it sends
-     * `terminalId: null` and the adapter skips stdio redirection.
+     * For **KDAP** requests (args contain `KdapLaunchKt`): simulates `kdap-launch`
+     * by connecting directly to KDAP's TCP listener and sending fake TTY info
+     * (`tty: null` = no real TTY in test environment). This tests the full
+     * runInTerminal flow including the TCP handshake, without needing a real
+     * terminal.
+     *
+     * For **CodeLLDB** requests (args contain `codelldb-launch`): runs the
+     * actual command via [ProcessBuilder]. `codelldb-launch` connects back to
+     * CodeLLDB's TCP and reports terminal device info.
      */
     private fun handleRunInTerminal(request: RunInTerminalRequest, output: OutputStream) {
         require(request.args.isNotEmpty()) {
             "runInTerminal request has empty args: $request"
         }
-        // Start the command — codelldb-launch connects back to the adapter via TCP
-        val process = ProcessBuilder(request.args)
-            .redirectErrorStream(true)
-            .start()
-        // Send success response so the adapter can proceed
-        DapTestUtils.sendRunInTerminalResponse(output, request.seq)
-        // Wait briefly for codelldb-launch to finish its TCP handshake.
-        // It should complete quickly (connects, sends JSON, closes).
-        process.waitFor(5, TimeUnit.SECONDS)
+
+        val isKdapRequest = request.args.any { it.contains("KdapLaunchKt") }
+
+        if (isKdapRequest) {
+            // KDAP: simulate kdap-launch by connecting directly to the TCP port
+            val connectArg = request.args.first { it.startsWith("--connect=") }
+            val address = connectArg.removePrefix("--connect=")
+            val lastColon = address.lastIndexOf(':')
+            val host = address.substring(0, lastColon)
+            val port = address.substring(lastColon + 1).toInt()
+
+            // 1. Connect to KDAP's TCP listener and send fake TTY info.
+            //    In CI/headless there is no TTY, so we send null.
+            //    KDAP will skip stdio injection and forward the launch as-is.
+            val tcpSocket = Socket(host, port)
+            val ttyJson = JSONObject().apply { put("tty", JSONObject.NULL) }
+            tcpSocket.getOutputStream().write(
+                ttyJson.toString().toByteArray(StandardCharsets.UTF_8)
+            )
+            tcpSocket.getOutputStream().flush()
+            tcpSocket.shutdownOutput() // signal we're done writing
+
+            // 2. Send runInTerminal success response to KDAP.
+            //    This unblocks the handler's awaitResponse().
+            DapTestUtils.sendRunInTerminalResponse(output, request.seq)
+
+            // 3. Read TCP response (handler writes after accept + read).
+            tcpSocket.getInputStream()
+                .bufferedReader(StandardCharsets.UTF_8)
+                .readText()
+            tcpSocket.close()
+        } else {
+            // CodeLLDB: run the command — codelldb-launch connects back via TCP
+            val process = ProcessBuilder(request.args)
+                .redirectErrorStream(true)
+                .start()
+            // Send success response so the adapter can proceed
+            DapTestUtils.sendRunInTerminalResponse(output, request.seq)
+            // Wait briefly for codelldb-launch to finish its TCP handshake
+            process.waitFor(5, TimeUnit.SECONDS)
+        }
     }
 }

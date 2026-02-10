@@ -53,6 +53,7 @@ sealed class DapMessage {
                 "launch" -> LaunchRequest(
                     seq = seq,
                     program = args?.optString("program", null),
+                    terminal = args?.optString("terminal")?.ifEmpty { null },
                 )
                 "evaluate" -> EvaluateRequest(
                     seq = seq,
@@ -61,7 +62,10 @@ sealed class DapMessage {
                     frameId = if (args?.has("frameId") == true) args.optInt("frameId") else null,
                 )
                 // Standard DAP commands (forwarded, minimal fields)
-                "initialize" -> InitializeRequest(seq)
+                "initialize" -> InitializeRequest(
+                    seq = seq,
+                    supportsRunInTerminalRequest = args?.optBoolean("supportsRunInTerminalRequest", false) ?: false,
+                )
                 "attach" -> AttachRequest(seq)
                 "restart" -> RestartRequest(seq)
                 "disconnect" -> DisconnectRequest(seq)
@@ -246,14 +250,20 @@ sealed class DapRequest : DapMessage() {
 
 // ── Commands KDAP inspects/modifies (rich fields) ────────────────────
 
-/** DAP `launch` request. KDAP reads [program] for reverse event injection. */
+/**
+ * DAP `launch` request. KDAP reads [program] for reverse event injection
+ * and [terminal] for `runInTerminal` support.
+ */
 data class LaunchRequest(
     override val seq: Int,
     val program: String?,
+    /** Terminal mode: `"integrated"`, `"external"`, or `null` for console. */
+    val terminal: String? = null,
 ) : DapRequest() {
     override val command get() = "launch"
     override fun toJson(): String = buildRequestJson(JSONObject().apply {
         if (program != null) put("program", program)
+        if (terminal != null) put("terminal", terminal)
     })
 }
 
@@ -277,7 +287,11 @@ data class EvaluateRequest(
 
 // ── Standard DAP commands (forwarded, minimal fields) ────────────────
 
-data class InitializeRequest(override val seq: Int) : DapRequest() {
+data class InitializeRequest(
+    override val seq: Int,
+    /** Whether the client supports the `runInTerminal` reverse request. */
+    val supportsRunInTerminalRequest: Boolean = false,
+) : DapRequest() {
     override val command get() = "initialize"
     override fun toJson(): String = buildRequestJson()
 }

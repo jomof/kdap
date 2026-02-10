@@ -2,12 +2,16 @@ package com.github.jomof.dap
 
 import com.github.jomof.dap.messages.DapMessage
 import com.github.jomof.dap.messages.DapRequest
+import com.github.jomof.dap.messages.DapResponse
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.selects.select
+import org.json.JSONObject
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.logging.Logger
 
 /**
@@ -74,6 +78,42 @@ class DapSession(
 
         /** Forward a modified version of the request to the backend. */
         data class ForwardModified(val modifiedRequest: DapRequest) : RequestAction()
+
+        /**
+         * Handle the request asynchronously in a separate coroutine.
+         *
+         * The [block] is launched as a child coroutine so the client reader
+         * can continue processing messages (e.g., responses to reverse
+         * requests sent by this handler). The block receives the original
+         * raw JSON and an [AsyncRequestContext] for sending reverse requests
+         * to the client, awaiting responses, and forwarding to the backend.
+         */
+        data class HandleAsync(
+            val block: suspend (rawJson: String, ctx: AsyncRequestContext) -> Unit,
+        ) : RequestAction()
+    }
+
+    /**
+     * Context provided to [RequestAction.HandleAsync] blocks for interacting
+     * with the DAP session's message channels.
+     */
+    interface AsyncRequestContext {
+        /**
+         * Sends a reverse request to the client, assigning a fresh sequence
+         * number. Returns the assigned seq for use with [awaitResponse].
+         */
+        suspend fun sendReverseRequest(json: String): Int
+
+        /**
+         * Waits for the client to respond to a reverse request with the given
+         * `request_seq`. The response is removed from the pending map.
+         */
+        suspend fun awaitResponse(requestSeq: Int): DapResponse
+
+        /**
+         * Forwards a (potentially modified) request JSON to the backend.
+         */
+        suspend fun forwardToBackend(json: String)
     }
 
     /**
@@ -129,6 +169,36 @@ class DapSession(
         val toClient = Channel<String>(CHANNEL_CAPACITY)
         val toBackend = Channel<String>(CHANNEL_CAPACITY)
 
+        // Seq counter for reverse requests sent to the client.
+        val reverseSeq = AtomicInteger(1_000_000)
+
+        // Pending reverse request responses: keyed by the seq we assigned
+        // to the reverse request. The HandleAsync block awaits on these.
+        val pendingReverseResponses = ConcurrentHashMap<Int, CompletableDeferred<DapResponse>>()
+
+        val asyncCtx = object : AsyncRequestContext {
+            override suspend fun sendReverseRequest(json: String): Int {
+                val seq = reverseSeq.getAndIncrement()
+                // Inject our assigned seq into the JSON
+                val obj = JSONObject(json)
+                obj.put("seq", seq)
+                val deferred = CompletableDeferred<DapResponse>()
+                pendingReverseResponses[seq] = deferred
+                toClient.send(obj.toString())
+                return seq
+            }
+
+            override suspend fun awaitResponse(requestSeq: Int): DapResponse {
+                val deferred = pendingReverseResponses[requestSeq]
+                    ?: throw IllegalStateException("No pending reverse request for seq $requestSeq")
+                return deferred.await()
+            }
+
+            override suspend fun forwardToBackend(json: String) {
+                toBackend.send(json)
+            }
+        }
+
         val clientWriterJob = launchWriter("clientWriter", toClient, clientOutput)
         val backendWriterJob = launchWriter("backendWriter", toBackend, backendOutput)
 
@@ -143,11 +213,38 @@ class DapSession(
         }
 
         val clientReaderJob = launchReader("clientReader", clientInput) { rawJson ->
-            val request = DapMessage.parse(rawJson) as DapRequest
-            when (val action = interceptor.onRequest(request)) {
-                is RequestAction.Forward -> toBackend.send(rawJson)
-                is RequestAction.Respond -> toClient.send(action.response.toJson())
-                is RequestAction.ForwardModified -> toBackend.send(action.modifiedRequest.toJson())
+            val message = DapMessage.parse(rawJson)
+            when (message) {
+                is DapResponse -> {
+                    // Route responses to pending reverse request handlers.
+                    val deferred = pendingReverseResponses.remove(message.requestSeq)
+                    if (deferred != null) {
+                        deferred.complete(message)
+                    } else {
+                        // Unmatched response — forward to backend defensively
+                        log.warning { "clientReader: unmatched response for request_seq=${message.requestSeq}, forwarding to backend" }
+                        toBackend.send(rawJson)
+                    }
+                }
+                is DapRequest -> {
+                    when (val action = interceptor.onRequest(message)) {
+                        is RequestAction.Forward -> toBackend.send(rawJson)
+                        is RequestAction.Respond -> toClient.send(action.response.toJson())
+                        is RequestAction.ForwardModified -> toBackend.send(action.modifiedRequest.toJson())
+                        is RequestAction.HandleAsync -> {
+                            // Launch async handler as a child coroutine so the
+                            // client reader continues processing messages.
+                            launch {
+                                action.block(rawJson, asyncCtx)
+                            }
+                        }
+                    }
+                }
+                else -> {
+                    // Unexpected message type from client — forward to backend
+                    log.warning { "clientReader: unexpected message type ${message::class.simpleName}, forwarding to backend" }
+                    toBackend.send(rawJson)
+                }
             }
         }
 

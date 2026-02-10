@@ -23,6 +23,7 @@ import com.github.jomof.dap.messages.DapRequest
  *
  * ## Default handlers
  *
+ * - [RunInTerminalHandler] — orchestrates `runInTerminal` for terminal launch modes
  * - [EvaluateContextRewriter] — rewrites CodeLLDB `_command` to `repl`
  * - [TriggerErrorHandler] — test hook for error-response path
  * - [ConsoleModeHandler] — injects console mode announcement
@@ -59,6 +60,7 @@ class KdapInterceptor(
 
     companion object {
         fun defaultHandlers(): List<InterceptionHandler> = listOf(
+            RunInTerminalHandler(),              // must be early (returns HandleAsync before others see launch)
             EvaluateContextRewriter(),
             TriggerErrorHandler(),
             ConsoleModeHandler(),

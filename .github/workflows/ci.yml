@@ -1,4 +1,4 @@
-# Build LLDB from source + download CodeLLDB, compile Kotlin, then run tests.
+# Install LLDB from packages + download CodeLLDB, compile Kotlin, then run tests.
 
 name: CI
 
@@ -8,9 +8,6 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
-
-env:
-  LLVM_VERSION: "21.1.8"
 
 jobs:
   build:
@@ -40,44 +37,55 @@ jobs:
           java-version: 25
           cache: gradle
 
-      - name: Cache LLDB build
-        uses: actions/cache@v4
-        with:
-          path: lldb-install/${{ matrix.platform_id }}
-          key: lldb-build-${{ matrix.platform_id }}-${{ env.LLVM_VERSION }}-${{ hashFiles('scripts/build-lldb.sh') }}
-
       - name: Cache CodeLLDB VSIX
         uses: actions/cache@v4
         with:
           path: codelldb-vsix
           key: codelldb-vsix-${{ matrix.os }}-${{ runner.arch }}
 
-      # Install build dependencies needed to compile LLDB from source.
-      - name: Install LLDB build deps (Linux)
+      # Install pre-built LLDB (lldb-dap, lldb-server, liblldb) from packages.
+      # Each platform creates lldb-install/<platform_id>/ pointing at the LLVM
+      # install prefix so the test harness can find lldb-dap.
+      - name: Install LLDB (Linux)
         if: matrix.os == 'ubuntu-22.04'
         run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-21.list
           sudo apt-get update -qq
-          sudo apt-get install -y cmake ninja-build python3-dev swig libxml2-dev
+          sudo apt-get install -y lldb-21
+          mkdir -p lldb-install
+          ln -s /usr/lib/llvm-21 lldb-install/linux-x64
+          echo "--- Verify ---"
+          lldb-install/linux-x64/bin/lldb-dap --version || true
 
-      - name: Install LLDB build deps (macOS)
+      - name: Install LLDB (macOS)
         if: runner.os == 'macOS'
         run: |
-          # cmake and python3 ship with Xcode; ninja and swig may not be present.
-          brew install ninja swig || true
+          brew install llvm
+          mkdir -p lldb-install
+          ln -s "$(brew --prefix llvm)" lldb-install/darwin-arm64
+          echo "--- Verify ---"
+          lldb-install/darwin-arm64/bin/lldb-dap --version || true
 
-      - name: Install LLDB build deps (Windows)
+      - name: Install LLDB (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install llvm --yes
+          mkdir -p lldb-install/win32-x64
+          LLVM_DIR="/c/Program Files/LLVM"
+          # Copy the directory tree (Windows junctions are unreliable in Git Bash)
+          cp -r "$LLVM_DIR/bin" lldb-install/win32-x64/bin
+          cp -r "$LLVM_DIR/lib" lldb-install/win32-x64/lib 2>/dev/null || true
+          echo "--- Verify ---"
+          ls lldb-install/win32-x64/bin/lldb-dap* || true
+
+      - name: Set up Python (Windows)
         if: runner.os == 'Windows'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      # Build LLDB from source (skips if cached install is present).
-      # This is run sequentially because the build is long on cache miss.
-      - name: Build LLDB from source
-        env:
-          PLATFORM_ID: ${{ matrix.platform_id }}
-          LLVM_VERSION: ${{ env.LLVM_VERSION }}
-        run: ./scripts/build-lldb.sh
 
       # Compile Kotlin, download CodeLLDB, and build debuggee in parallel.
       - name: Compile, download CodeLLDB, and build debuggee in parallel
@@ -99,8 +107,6 @@ jobs:
       # lldb-dap hangs at launch (can't attach) and CodeLLDB can launch but
       # can't detect process exit.  cmake's ad-hoc signature doesn't include
       # entitlements, so we re-sign with an explicit entitlements plist.
-      # We also re-sign lldb-dap itself (its signature may be invalid after
-      # building from source).
       - name: Code-sign binaries for debugging (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -127,13 +133,6 @@ jobs:
               codesign -d --entitlements - "$f" 2>&1 | head -5  # verify
             fi
           done
-
-          # Re-sign lldb-dap (fix potentially invalid signature from build).
-          lldb_dap="lldb-install/${{ matrix.platform_id }}/bin/lldb-dap"
-          if [ -f "$lldb_dap" ]; then
-            codesign --force --sign - "$lldb_dap"
-            echo "Signed $lldb_dap (ad-hoc)"
-          fi
 
       # Attach tests spawn the debuggee from the test JVM, then the adapter
       # (lldb-dap/CodeLLDB — a sibling process) attaches by PID. Yama's

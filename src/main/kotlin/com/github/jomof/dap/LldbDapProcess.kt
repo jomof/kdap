@@ -158,8 +158,8 @@ class LldbDapProcess private constructor(
          * (e.g. `"darwin-arm64"`, `"linux-x64"`, `"win32-x64"`), or `null` if
          * the platform is not recognized.
          *
-         * This matches the directory names used by the `scripts/build-lldb.sh`
-         * script and LLVM release conventions.
+         * This matches the directory names used by standard LLVM install
+         * prefixes and release conventions.
          */
         fun currentPlatformId(): String? {
             val os = System.getProperty("os.name").lowercase()
@@ -222,7 +222,7 @@ class LldbDapProcess private constructor(
                 "linux" in os -> {
                     check(libDir.isDirectory) {
                         "LLVM lib directory not found: $libDir — " +
-                            "the LLVM installation appears incomplete (run scripts/build-lldb.sh)"
+                            "the LLVM installation appears incomplete"
                     }
                     val libPath = libDir.absolutePath
                     env["LD_LIBRARY_PATH"] = env["LD_LIBRARY_PATH"]
@@ -251,7 +251,7 @@ class LldbDapProcess private constructor(
                     val binDir = File(platformDir, "bin")
                     check(binDir.isDirectory) {
                         "LLVM bin directory not found: $binDir — " +
-                            "the LLVM installation appears incomplete (run scripts/build-lldb.sh)"
+                            "the LLVM installation appears incomplete"
                     }
                     env["PATH"] = env["PATH"]
                         ?.let { "${binDir.absolutePath};$it" }

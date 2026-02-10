@@ -15,8 +15,9 @@ import java.net.ServerSocket
  * - **TCP convenience**: [startTcp] picks a free port and starts lldb-dap in
  *   TCP mode, returning both the process wrapper and the port.
  *
- * Run `scripts/build-lldb.sh` to build LLDB from source for the current
- * platform if lldb-dap is not available.
+ * Install LLDB for the current platform (e.g. `apt install lldb-21` on
+ * Ubuntu, `brew install llvm` on macOS) and create the expected
+ * `lldb-install/<platformId>/` symlink if lldb-dap is not available.
  */
 object LldbDapHarness {
 
@@ -43,7 +44,7 @@ object LldbDapHarness {
     fun start(): LldbDapProcess {
         val path = resolveLldbDapPath()
             ?: throw IllegalStateException(
-                "lldb-dap not found (run scripts/build-lldb.sh or set KDAP_LLDB_ROOT)"
+                "lldb-dap not found (install LLDB or set KDAP_LLDB_ROOT)"
             )
         return LldbDapProcess.start(path)
     }
@@ -57,7 +58,7 @@ object LldbDapHarness {
         val port = ServerSocket(0).use { it.localPort }
         val path = resolveLldbDapPath()
             ?: throw IllegalStateException(
-                "lldb-dap not found (run scripts/build-lldb.sh or set KDAP_LLDB_ROOT)"
+                "lldb-dap not found (install LLDB or set KDAP_LLDB_ROOT)"
             )
         val lldbDap = LldbDapProcess.startTcp(path, port)
         return lldbDap to port

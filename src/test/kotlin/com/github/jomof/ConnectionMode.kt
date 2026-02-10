@@ -190,7 +190,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
     IN_PROCESS(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
             val lldbDapPath = LldbDapHarness.resolveLldbDapPath()
-                ?: error("lldb-dap not found (run scripts/build-lldb.sh or set KDAP_LLDB_ROOT)")
+                ?: error("lldb-dap not found (install LLDB or set KDAP_LLDB_ROOT)")
             val portHolder = AtomicInteger(0)
             val portReady = CountDownLatch(1)
             val transport = Transport.TcpListen(0, onBound = { port ->
@@ -245,7 +245,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
     STDIO_LLDB(ServerKind.LLDB_DAP) {
         override fun connect(): ConnectionContext {
             if (!LldbDapHarness.isAvailable())
-                throw IllegalStateException("lldb-dap not available (run scripts/build-lldb.sh or set KDAP_LLDB_ROOT)")
+                throw IllegalStateException("lldb-dap not available (install LLDB or set KDAP_LLDB_ROOT)")
             val lldbDap = LldbDapHarness.start()
             val stderrBuf = StringBuilder()
             thread(isDaemon = true) {

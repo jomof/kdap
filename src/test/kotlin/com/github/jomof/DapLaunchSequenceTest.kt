@@ -328,7 +328,7 @@ class DapLaunchSequenceTest {
         ),
     )
 
-    // ── Tests ────────────────────────────────────────────────────────────
+    // ── Tests (C++ debuggee) ────────────────────────────────────────────
 
     // --- Default launch (no debuggee args, terminal: "console", name: "test") ---
 
@@ -385,7 +385,7 @@ class DapLaunchSequenceTest {
         )
     }
 
-    // --- terminal: "integrated" (CodeLLDB uses runInTerminal; KDAP/lldb-dap ignores) ---
+    // --- terminal: "integrated" ---
 
     @Test
     fun `kdap produces expected events for terminal integrated`() {
@@ -408,7 +408,7 @@ class DapLaunchSequenceTest {
         )
     }
 
-    // --- terminal: "external" (CodeLLDB uses runInTerminal; KDAP/lldb-dap ignores) ---
+    // --- terminal: "external" ---
 
     @Test
     fun `kdap produces expected events for terminal external`() {
@@ -431,12 +431,102 @@ class DapLaunchSequenceTest {
         )
     }
 
+    // ── Tests (Rust debuggee) ─────────────────────────────────────────────
+    // Same expected sequences — both debuggees share the same testcase API.
+
+    // --- Default launch (rust) ---
+
+    @Test
+    fun `kdap produces expected launch events (rust)`() {
+        runLaunchAndAssert(ConnectionMode.STDIO, Server.KDAP, "kdap-rust", debuggee = Debuggee.RUST)
+    }
+
+    @Test
+    fun `codelldb produces expected launch events (rust)`() {
+        assumeTrue(!isWindows, "CodeLLDB stdio transport is unreliable on Windows")
+        runLaunchAndAssert(ConnectionMode.STDIO_CODELDB, Server.CODELLDB, "codelldb-rust", debuggee = Debuggee.RUST)
+    }
+
+    // --- stdio testcase (rust) ---
+
+    @Test
+    fun `kdap produces expected events for stdio testcase (rust)`() {
+        runLaunchAndAssert(
+            ConnectionMode.STDIO, Server.KDAP, "kdap-stdio-rust",
+            debuggee = Debuggee.RUST,
+            launchArgs = mapOf("name" to "test", "terminal" to "console", "args" to listOf("stdio")),
+            expected = expectedStdioLaunchSequence,
+        )
+    }
+
+    @Test
+    fun `codelldb produces expected events for stdio testcase (rust)`() {
+        assumeTrue(!isWindows, "CodeLLDB stdio transport is unreliable on Windows")
+        runLaunchAndAssert(
+            ConnectionMode.STDIO_CODELDB, Server.CODELLDB, "codelldb-stdio-rust",
+            debuggee = Debuggee.RUST,
+            launchArgs = mapOf("name" to "test", "terminal" to "console", "args" to listOf("stdio")),
+            expected = expectedStdioLaunchSequence,
+        )
+    }
+
+    // --- terminal: "integrated" (rust) ---
+
+    @Test
+    fun `kdap produces expected events for terminal integrated (rust)`() {
+        runLaunchAndAssert(
+            ConnectionMode.STDIO, Server.KDAP, "kdap-integrated-rust",
+            debuggee = Debuggee.RUST,
+            launchArgs = mapOf("name" to "test", "terminal" to "integrated"),
+            expected = expectedTerminalLaunchSequence("integrated"),
+            supportsRunInTerminal = true,
+        )
+    }
+
+    @Test
+    fun `codelldb produces expected events for terminal integrated (rust)`() {
+        assumeTrue(!isWindows, "CodeLLDB stdio transport is unreliable on Windows")
+        runLaunchAndAssert(
+            ConnectionMode.STDIO_CODELDB, Server.CODELLDB, "codelldb-integrated-rust",
+            debuggee = Debuggee.RUST,
+            launchArgs = mapOf("name" to "test", "terminal" to "integrated"),
+            expected = expectedTerminalLaunchSequence("integrated"),
+            supportsRunInTerminal = true,
+        )
+    }
+
+    // --- terminal: "external" (rust) ---
+
+    @Test
+    fun `kdap produces expected events for terminal external (rust)`() {
+        runLaunchAndAssert(
+            ConnectionMode.STDIO, Server.KDAP, "kdap-external-rust",
+            debuggee = Debuggee.RUST,
+            launchArgs = mapOf("name" to "test", "terminal" to "external"),
+            expected = expectedTerminalLaunchSequence("external"),
+            supportsRunInTerminal = true,
+        )
+    }
+
+    @Test
+    fun `codelldb produces expected events for terminal external (rust)`() {
+        assumeTrue(!isWindows, "CodeLLDB stdio transport is unreliable on Windows")
+        runLaunchAndAssert(
+            ConnectionMode.STDIO_CODELDB, Server.CODELLDB, "codelldb-external-rust",
+            debuggee = Debuggee.RUST,
+            launchArgs = mapOf("name" to "test", "terminal" to "external"),
+            expected = expectedTerminalLaunchSequence("external"),
+            supportsRunInTerminal = true,
+        )
+    }
+
     // ── Shared test body ─────────────────────────────────────────────────
 
     /**
      * Runs a full launch lifecycle and asserts the message stream matches
      * [expected].
      *
+     * @param debuggee which debuggee binary to launch ([Debuggee.CPP] or [Debuggee.RUST]).
      * @param launchArgs extra arguments merged into the DAP `launch` request
      *   (e.g. `"name"`, `"terminal"`, `"args"`). These are passed directly to
      *   [DapTestUtils.sendLaunchRequest] as `extraArgs`.
@@ -450,15 +540,16 @@ class DapLaunchSequenceTest {
         mode: ConnectionMode,
         server: Server,
         label: String,
+        debuggee: Debuggee = Debuggee.CPP,
         launchArgs: Map<String, Any> = mapOf("name" to "test", "terminal" to "console"),
         expected: List<Expected> = expectedLaunchSequence,
         supportsRunInTerminal: Boolean = false,
     ) {
-        val debuggee = DapTestUtils.resolveDebuggeeBinary()
+        val debuggeeBinary = debuggee.resolve()
         mode.connect().use { ctx ->
             try {
                 val allMessages = captureLaunchMessages(
-                    ctx, debuggee.absolutePath, launchArgs,
+                    ctx, debuggeeBinary.absolutePath, launchArgs,
                     supportsRunInTerminal = supportsRunInTerminal,
                 )
                 val interesting = filterToInterestingMessages(allMessages)

@@ -4,6 +4,10 @@ use std::env;
 fn main() {
     let testcase = env::args().nth(1);
     match testcase.as_deref() {
+        Some("stdio") => {
+            println!("stdout");
+            eprintln!("stderr");
+        }
         Some("panic") => {
             panic!("Oops!!!");
         }
@@ -18,7 +22,7 @@ fn main() {
         Some("sleep") => {
             std::thread::sleep(std::time::Duration::from_secs(10));
         }
-        _ => {
+        Some(_) => {
             primitives();
             enums();
             structs();
@@ -28,6 +32,10 @@ fn main() {
             maps();
             misc();
             step_in();
+        }
+        None => {
+            println!("No testcase was specified.");
+            std::process::exit(-1);
         }
     }
 }

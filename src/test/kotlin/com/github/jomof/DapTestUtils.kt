@@ -9,11 +9,34 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 
+/**
+ * Which debuggee binary to launch. Both share the same testcase interface
+ * (`stdio`, no-args, etc.) so expected DAP message sequences are reusable.
+ */
+enum class Debuggee {
+    /** C++ debuggee (always available — built by cmake). */
+    CPP,
+    /** Rust debuggee (available when cargo was present at cmake time). */
+    RUST;
+
+    /**
+     * Resolves the debuggee binary, or throws if not found.
+     * For [RUST], throws with a hint about needing cargo installed.
+     */
+    fun resolve(): File = when (this) {
+        CPP  -> DapTestUtils.resolveDebuggeeBinary()
+        RUST -> DapTestUtils.resolveRustDebuggeeBinary()
+    }
+
+    /** True if the debuggee binary exists and is executable. */
+    fun isAvailable(): Boolean = try { resolve(); true } catch (_: Exception) { false }
+}
+
 /** Shared DAP message helpers for tests. */
 object DapTestUtils {
 
     /**
-     * Resolves the debuggee binary built by cmake.
+     * Resolves the C++ debuggee binary built by cmake.
      * Throws if not found — run: `cmake -B debuggee/build debuggee && cmake --build debuggee/build`
      */
     fun resolveDebuggeeBinary(): File {
@@ -24,6 +47,20 @@ object DapTestUtils {
             File(cwd, "debuggee/build/Debug/debuggee.exe"), // MSVC multi-config
         ).firstOrNull { it.isFile && it.canExecute() }
             ?: error("debuggee binary not found — run: cmake -B debuggee/build debuggee && cmake --build debuggee/build")
+    }
+
+    /**
+     * Resolves the Rust debuggee binary built by cmake (via cargo).
+     * Throws if not found — requires cargo at cmake time.
+     */
+    fun resolveRustDebuggeeBinary(): File {
+        val cwd = File(System.getProperty("user.dir"))
+        return listOf(
+            File(cwd, "debuggee/build/rust-debuggee"),
+            File(cwd, "debuggee/build/rust-debuggee.exe"),       // Windows
+            File(cwd, "debuggee/build/Debug/rust-debuggee.exe"), // MSVC multi-config
+        ).firstOrNull { it.isFile && it.canExecute() }
+            ?: error("rust-debuggee binary not found — install cargo (rustup) and rebuild: cmake -B debuggee/build debuggee && cmake --build debuggee/build")
     }
 
     private const val CONTENT_LENGTH_PREFIX = "Content-Length: "

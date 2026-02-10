@@ -99,7 +99,7 @@ jobs:
           PLIST
 
           # Sign debuggee binaries with get-task-allow.
-          for f in debuggee/build/debuggee debuggee/build/debuggee2; do
+          for f in debuggee/build/debuggee debuggee/build/debuggee2 debuggee/build/rust-debuggee; do
             if [ -f "$f" ]; then
               codesign --force --sign - --entitlements /tmp/debuggee.entitlements "$f"
               echo "Signed $f (with get-task-allow)"

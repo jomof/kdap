@@ -54,4 +54,4 @@ lldb-install/
 prebuilts/
 
 ### Debuggee build artifacts (built by cmake) ###
-debuggee/build/
+debuggee/

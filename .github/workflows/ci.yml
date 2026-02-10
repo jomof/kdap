@@ -120,6 +120,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y libxml2 libncurses6 libpython3.10
 
+      # Attach tests spawn the debuggee from the test JVM, then the adapter
+      # (lldb-dap/CodeLLDB — a sibling process) attaches by PID. Yama's
+      # default ptrace_scope=1 only allows tracing descendants, which blocks
+      # this. Setting it to 0 permits any process from the same UID to trace.
+      - name: Allow ptrace attach (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: sudo sysctl -w kernel.yama.ptrace_scope=0
+
       # lldb-dap.exe links against Python (scripting support). LLVM 21
       # was built with Python 3.10 — must match exactly (python310.dll).
       # This mirrors the Linux step which installs libpython3.10.

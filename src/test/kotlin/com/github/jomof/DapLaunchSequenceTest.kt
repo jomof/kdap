@@ -64,16 +64,6 @@ class DapLaunchSequenceTest {
             event = InitializedEvent(seq = 0),
         ),
 
-        // lldb-dap sends a capabilities event after initialized; CodeLLDB does not.
-        // TODO: suppress in KDAP to align with CodeLLDB
-        ExpectedEvent(
-            "capabilities event (lldb-dap)", kdapOnly,
-            event = CapabilitiesEvent(
-                seq = 0,
-                capabilities = mapOf("supportsRestartRequest" to true),
-            ),
-        ),
-
         // ── After configurationDone ──────────────────────────────────
         ExpectedEvent(
             "launch command line", both,
@@ -154,16 +144,6 @@ class DapLaunchSequenceTest {
         ExpectedEvent(
             "initialized event", both,
             event = InitializedEvent(seq = 0),
-        ),
-
-        // lldb-dap sends a capabilities event after initialized; CodeLLDB does not.
-        // TODO: suppress in KDAP to align with CodeLLDB
-        ExpectedEvent(
-            "capabilities event (lldb-dap)", kdapOnly,
-            event = CapabilitiesEvent(
-                seq = 0,
-                capabilities = mapOf("supportsRestartRequest" to true),
-            ),
         ),
 
         // ── After configurationDone ──────────────────────────────────
@@ -247,16 +227,6 @@ class DapLaunchSequenceTest {
         ExpectedEvent(
             "initialized event", both,
             event = InitializedEvent(seq = 0),
-        ),
-
-        // lldb-dap sends a capabilities event after initialized; CodeLLDB does not.
-        // TODO: suppress in KDAP to align with CodeLLDB
-        ExpectedEvent(
-            "capabilities event (lldb-dap)", kdapOnly,
-            event = CapabilitiesEvent(
-                seq = 0,
-                capabilities = mapOf("supportsRestartRequest" to true),
-            ),
         ),
 
         // ── runInTerminal (CodeLLDB only) ────────────────────────────

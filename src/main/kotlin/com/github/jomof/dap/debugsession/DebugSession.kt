@@ -25,7 +25,9 @@ class DebugSession {
 
     /**
      * Set to `true` once the debuggee process is running (after
-     * `target.launch()` or `target.attach()`).
+     * `target.launch()` or `target.attach()`). Used by
+     * [com.github.jomof.dap.interception.OutputCategoryNormalizer]
+     * to reclassify debuggee output from `console` to `stdout`.
      */
     @Volatile
     var processRunning: Boolean = false

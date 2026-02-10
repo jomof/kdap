@@ -381,9 +381,10 @@ class DapSession(
             }
 
             // Suppress console output events BEFORE the interceptor chain.
-            // This must happen before the chain because
-            // OutputCoalescingHandler may buffer the event and flush it on
-            // a later message when suppression is inactive.
+            // This must happen before the chain because:
+            // 1. OutputCategoryNormalizer may reclassify console → stdout
+            // 2. OutputCoalescingHandler may buffer the reclassified event
+            //    and flush it on a later message when suppression is inactive
             // By suppressing early, the chain never sees auto-display noise.
             if (pendingSilentRequests.get() > 0
                 && message is OutputEvent

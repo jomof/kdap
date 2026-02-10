@@ -135,7 +135,14 @@ if [[ ! -d "$LLVM_SRC_DIR/llvm" ]]; then
     curl -fSL --connect-timeout 60 --max-time 1200 -o "$SOURCE_DIR/$SOURCE_ARCHIVE" "$SOURCE_URL"
   fi
   echo "Extracting source (this may take a minute)..."
-  tar -xJf "$SOURCE_DIR/$SOURCE_ARCHIVE" -C "$SOURCE_DIR"
+  # The LLVM tarball contains symlinks (test fixtures, build utils) that
+  # cannot be created on Windows.  These are not needed to build LLDB,
+  # so we tolerate extraction errors on Windows.
+  if [[ "$PLATFORM_ID" == win32-* ]]; then
+    tar -xJf "$SOURCE_DIR/$SOURCE_ARCHIVE" -C "$SOURCE_DIR" || true
+  else
+    tar -xJf "$SOURCE_DIR/$SOURCE_ARCHIVE" -C "$SOURCE_DIR"
+  fi
   if [[ ! -d "$LLVM_SRC_DIR/llvm" ]]; then
     echo "Extraction did not produce expected directory: $LLVM_SRC_DIR/llvm" >&2
     exit 1

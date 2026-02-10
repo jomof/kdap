@@ -73,6 +73,14 @@ jobs:
           echo "--- Verify ---"
           lldb-install/darwin-arm64/bin/lldb --version
 
+      # The LLVM 21.1.8 Windows installer ships liblldb.dll linked against
+      # python310.dll.  Install the matching Python so the DLL can be loaded.
+      - name: Set up Python 3.10 (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
       - name: Install LLDB (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -82,29 +90,11 @@ jobs:
           # Copy the directory tree (Windows junctions are unreliable in Git Bash)
           cp -r "$LLVM_DIR/bin" lldb-install/win32-x64/bin
           cp -r "$LLVM_DIR/lib" lldb-install/win32-x64/lib 2>/dev/null || true
-          echo "--- Verify binaries exist ---"
+          echo "--- Verify ---"
           ls lldb-install/win32-x64/bin/lldb.exe \
              lldb-install/win32-x64/bin/lldb-dap.exe \
              lldb-install/win32-x64/bin/lldb-server.exe \
              lldb-install/win32-x64/bin/liblldb.dll
-
-      - name: Diagnose LLDB dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          BIN="lldb-install/win32-x64/bin"
-          echo "--- DLL imports of liblldb.dll ---"
-          "$BIN/llvm-objdump.exe" -p "$BIN/liblldb.dll" | grep "DLL Name" || true
-          echo "--- DLL imports of lldb-dap.exe ---"
-          "$BIN/llvm-objdump.exe" -p "$BIN/lldb-dap.exe" | grep "DLL Name" || true
-          echo "--- Try running lldb --version ---"
-          PATH="$(cygpath -w "$BIN");$PATH"
-          "$BIN/lldb.exe" --version 2>&1 || echo "lldb exited with code $?"
-
-      - name: Set up Python (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
 
       # Compile Kotlin, download CodeLLDB, and build debuggee in parallel.
       - name: Compile, download CodeLLDB, and build debuggee in parallel

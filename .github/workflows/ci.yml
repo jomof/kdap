@@ -9,6 +9,10 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+env:
+  LLVM_VERSION: "21"           # major version for apt / brew
+  LLVM_VERSION_FULL: "21.1.8"  # exact version for choco
+
 jobs:
   build:
     strategy:
@@ -51,35 +55,35 @@ jobs:
         run: |
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
             | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
-          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main" \
-            | sudo tee /etc/apt/sources.list.d/llvm-21.list
+          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-$LLVM_VERSION main" \
+            | sudo tee /etc/apt/sources.list.d/llvm-$LLVM_VERSION.list
           sudo apt-get update -qq
-          sudo apt-get install -y lldb-21
+          sudo apt-get install -y lldb-$LLVM_VERSION
           mkdir -p lldb-install
-          ln -s /usr/lib/llvm-21 lldb-install/linux-x64
+          ln -s /usr/lib/llvm-$LLVM_VERSION lldb-install/linux-x64
           echo "--- Verify ---"
-          lldb-install/linux-x64/bin/lldb-dap --version || true
+          lldb-install/linux-x64/bin/lldb --version
 
       - name: Install LLDB (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install llvm
+          brew install llvm@$LLVM_VERSION
           mkdir -p lldb-install
-          ln -s "$(brew --prefix llvm)" lldb-install/darwin-arm64
+          ln -s "$(brew --prefix llvm@$LLVM_VERSION)" lldb-install/darwin-arm64
           echo "--- Verify ---"
-          lldb-install/darwin-arm64/bin/lldb-dap --version || true
+          lldb-install/darwin-arm64/bin/lldb --version
 
       - name: Install LLDB (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install llvm --yes
+          choco install llvm --version=$LLVM_VERSION_FULL --yes
           mkdir -p lldb-install/win32-x64
           LLVM_DIR="/c/Program Files/LLVM"
           # Copy the directory tree (Windows junctions are unreliable in Git Bash)
           cp -r "$LLVM_DIR/bin" lldb-install/win32-x64/bin
           cp -r "$LLVM_DIR/lib" lldb-install/win32-x64/lib 2>/dev/null || true
           echo "--- Verify ---"
-          ls lldb-install/win32-x64/bin/lldb-dap* || true
+          lldb-install/win32-x64/bin/lldb --version
 
       - name: Set up Python (Windows)
         if: runner.os == 'Windows'

@@ -23,6 +23,15 @@ class DebugSession {
     @Volatile
     var clientSupportsRunInTerminal: Boolean = false
 
+    /**
+     * Set to `true` once the debuggee process is running (after
+     * `target.launch()` or `target.attach()`). Used by
+     * [com.github.jomof.dap.interception.OutputCategoryNormalizer]
+     * to reclassify debuggee output from `console` to `stdout`.
+     */
+    @Volatile
+    var processRunning: Boolean = false
+
     /** Whether to kill (true) or detach (false) on disconnect. */
     @Volatile
     var terminateOnDisconnect: Boolean = false

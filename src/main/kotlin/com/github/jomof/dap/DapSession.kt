@@ -12,7 +12,9 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import java.util.logging.Logger
 
 /**
@@ -156,6 +158,25 @@ class DapSession(
          * protocol milestones like `configurationDone`.
          */
         suspend fun interceptClientRequest(command: String): String
+
+        /**
+         * Activates the event gate. While active, backend messages that
+         * have passed through the interceptor chain are buffered instead
+         * of being sent to the client. This prevents backend-originated
+         * events (e.g., process exit) from racing ahead of events sent
+         * by the [RequestAction.HandleAsync] block.
+         *
+         * Call [releaseEventGate] to flush buffered messages to the client
+         * in order.
+         */
+        fun activateEventGate()
+
+        /**
+         * Releases the event gate and flushes all buffered messages to
+         * the client in the order they were received. After this call,
+         * backend messages flow directly to the client again.
+         */
+        suspend fun releaseEventGate()
     }
 
     /**
@@ -250,6 +271,14 @@ class DapSession(
         // the next message).
         val deferredDecrements = AtomicInteger(0)
 
+        // Event gate: when non-null, backend messages that have passed
+        // through the interceptor chain are buffered here instead of
+        // being sent to the client. This prevents process-exit events
+        // from racing ahead of launch-sequence events sent by an async
+        // handler. Responses routed to pending callers are NOT gated
+        // (they are consumed before the gate check).
+        val eventGate = AtomicReference<ConcurrentLinkedQueue<String>?>(null)
+
         val asyncCtx = object : AsyncRequestContext {
             override suspend fun sendReverseRequest(json: String): Int {
                 val seq = reverseSeq.getAndIncrement()
@@ -313,6 +342,20 @@ class DapSession(
                 pendingClientInterceptions[command] = deferred
                 return deferred.await()
             }
+
+            override fun activateEventGate() {
+                eventGate.set(ConcurrentLinkedQueue())
+            }
+
+            override suspend fun releaseEventGate() {
+                val queue = eventGate.getAndSet(null) ?: return
+                // Drain buffered messages. After clearing the gate reference,
+                // the backend reader may still have a reference from a
+                // concurrent check, so yield and drain once more.
+                drainGateQueue(queue, toClient)
+                yield()
+                drainGateQueue(queue, toClient)
+            }
         }
 
         val clientWriterJob = launchWriter("clientWriter", toClient, clientOutput)
@@ -337,21 +380,36 @@ class DapSession(
                 }
             }
 
+            // Suppress console output events BEFORE the interceptor chain.
+            // This must happen before the chain because:
+            // 1. OutputCategoryNormalizer may reclassify console → stdout
+            // 2. OutputCoalescingHandler may buffer the reclassified event
+            //    and flush it on a later message when suppression is inactive
+            // By suppressing early, the chain never sees auto-display noise.
+            if (pendingSilentRequests.get() > 0
+                && message is OutputEvent
+                && message.category == "console"
+            ) {
+                log.fine { "backendReader: suppressed console output during silent evaluate: ${message.output.take(80)}" }
+                // Still apply deferred decrements
+                val n = deferredDecrements.getAndSet(0)
+                if (n > 0) pendingSilentRequests.addAndGet(-n)
+                return@launchReader
+            }
+
             val results = interceptor.onBackendMessage(message)
             for (msg in results) {
-                // Suppress console output events during silent Python evaluate
-                // calls. These are auto-display artifacts from LLDB's Python
-                // interpreter that would otherwise pollute the event stream.
-                if (pendingSilentRequests.get() > 0
-                    && msg is OutputEvent
-                    && msg.category == "console"
-                ) {
-                    log.fine { "backendReader: suppressed console output during silent evaluate: ${msg.output.take(80)}" }
-                    continue
-                }
                 // Identity check: if the interceptor returned the same object,
                 // use the original raw JSON for perfect wire fidelity.
-                toClient.send(if (msg === message) rawJson else msg.toJson())
+                val json = if (msg === message) rawJson else msg.toJson()
+
+                // If the event gate is active, buffer instead of sending.
+                val gate = eventGate.get()
+                if (gate != null) {
+                    gate.add(json)
+                } else {
+                    toClient.send(json)
+                }
             }
 
             // Apply deferred decrements AFTER processing this message, so the
@@ -506,5 +564,16 @@ class DapSession(
          * normal operation; small enough to bound memory if a writer stalls.
          */
         private const val CHANNEL_CAPACITY = 64
+
+        /** Drains all messages from [queue] into [channel]. */
+        private suspend fun drainGateQueue(
+            queue: ConcurrentLinkedQueue<String>,
+            channel: Channel<String>,
+        ) {
+            while (true) {
+                val json = queue.poll() ?: break
+                channel.send(json)
+            }
+        }
     }
 }

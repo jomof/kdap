@@ -30,6 +30,7 @@ import com.github.jomof.dap.messages.DapRequest
  * - [DisconnectHandler] — handles disconnect request via [DebugSession]
  * - [TerminateHandler] — handles terminate request via [DebugSession]
  * - [EvaluateContextRewriter] — rewrites CodeLLDB `_command` to `repl`
+ * - [OutputCategoryNormalizer] — reclassifies debuggee console output as stdout
  * - [ExitStatusHandler] — reformats process exit output to match CodeLLDB
  * - [OutputCoalescingHandler] — combines consecutive stdout/stderr output events
  */
@@ -66,6 +67,7 @@ class KdapInterceptor(
                 DisconnectHandler(session),        // handles disconnect request
                 TerminateHandler(session),         // handles terminate request
                 EvaluateContextRewriter(),         // rewrites CodeLLDB _command → repl
+                OutputCategoryNormalizer(session),  // reclassifies debuggee console → stdout
                 ExitStatusHandler(),               // reformats exit output to match CodeLLDB
                 OutputCoalescingHandler(),         // combines consecutive stdout/stderr events
             )

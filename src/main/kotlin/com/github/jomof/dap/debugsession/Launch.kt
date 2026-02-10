@@ -104,16 +104,25 @@ suspend fun DebugSession.handleLaunch(rawJson: String, ctx: AsyncRequestContext)
         // create_terminal (launch.rs:56)
         val ttyPath = createTerminal(args, ctx)
 
-        // complete_launch (launch.rs:57)
-        completeLaunch(args, debugger, target, ttyPath, ctx)
+        // Activate the event gate so that backend events (e.g., process
+        // exit on fast-exiting programs) are buffered until we've sent
+        // all launch-sequence events to the client.
+        ctx.activateEventGate()
+        try {
+            // complete_launch (launch.rs:57)
+            completeLaunch(args, debugger, target, ttyPath, ctx)
 
-        // Send responses and continued event in CodeLLDB order:
-        // 1. launch response
-        // 2. configurationDone response
-        // 3. continued event
-        sendSuccessResponse(ctx, requestSeq, "launch")
-        sendSuccessResponse(ctx, configDoneSeq, "configurationDone")
-        ctx.sendEventToClient(ContinuedEvent(seq = 0, allThreadsContinued = true).toJson())
+            // Send responses and continued event in CodeLLDB order:
+            // 1. launch response
+            // 2. configurationDone response
+            // 3. continued event
+            sendSuccessResponse(ctx, requestSeq, "launch")
+            sendSuccessResponse(ctx, configDoneSeq, "configurationDone")
+            ctx.sendEventToClient(ContinuedEvent(seq = 0, allThreadsContinued = true).toJson())
+        } finally {
+            // Release gate — buffered backend events now flow to the client.
+            ctx.releaseEventGate()
+        }
 
     } catch (e: Exception) {
         log.warning { "Launch: launch failed: ${e.message}" }
@@ -183,6 +192,11 @@ private suspend fun DebugSession.completeLaunch(
         programPath
     }
     consoleMessage("Launching: $commandLine", ctx)
+
+    // Mark the process as running before launching. Events that arrive
+    // from the backend after this point (which are gated) represent
+    // debuggee activity and should be treated as process output.
+    processRunning = true
 
     // Launch the process (launch.rs:154-165)
     val process: SBProcess
@@ -254,12 +268,19 @@ suspend fun DebugSession.handleAttach(rawJson: String, ctx: AsyncRequestContext)
         val configDoneRawJson = ctx.interceptClientRequest("configurationDone")
         val configDoneSeq = JSONObject(configDoneRawJson).optInt("seq", 0)
 
-        // complete_attach (launch.rs:240)
-        completeAttach(args, debugger, target, ctx)
+        // Activate the event gate so that backend events are buffered
+        // until we've sent all attach-sequence events.
+        ctx.activateEventGate()
+        try {
+            // complete_attach (launch.rs:240)
+            completeAttach(args, debugger, target, ctx)
 
-        // Send attach and configurationDone responses
-        sendSuccessResponse(ctx, requestSeq, "attach")
-        sendSuccessResponse(ctx, configDoneSeq, "configurationDone")
+            // Send attach and configurationDone responses
+            sendSuccessResponse(ctx, requestSeq, "attach")
+            sendSuccessResponse(ctx, configDoneSeq, "configurationDone")
+        } finally {
+            ctx.releaseEventGate()
+        }
 
     } catch (e: Exception) {
         log.warning { "Launch: attach failed: ${e.message}" }
@@ -282,6 +303,9 @@ private suspend fun DebugSession.completeAttach(
     if (args.common.preRunCommands != null) {
         execCommands("preRunCommands", args.common.preRunCommands, debugger, ctx)
     }
+
+    // Mark the process as running before attaching.
+    processRunning = true
 
     // Attach (launch.rs:250-298)
     val process: SBProcess

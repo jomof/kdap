@@ -111,6 +111,32 @@ jobs:
           wait $VSIX_PID
           wait $DEBUGGEE_PID
 
+      - name: Diagnose debuggee (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          echo "--- Debuggee binaries ---"
+          ls -la debuggee/build/Debug/debuggee*.exe debuggee/build/debuggee*.exe 2>/dev/null || true
+          ls -la debuggee/build/Debug/*.dll debuggee/build/*.dll 2>/dev/null || true
+          ls -la debuggee/build/rust-debuggee.exe debuggee/build/Debug/rust-debuggee.exe 2>/dev/null || true
+          echo "--- DLL dependencies of debuggee ---"
+          BIN="lldb-install/win32-x64/bin"
+          for f in debuggee/build/Debug/debuggee.exe debuggee/build/debuggee.exe; do
+            if [ -f "$f" ]; then
+              echo "=== $f ==="
+              "$BIN/llvm-objdump.exe" -p "$f" | grep "DLL Name" || true
+              echo "--- Running: $f stdio ---"
+              "$f" stdio 2>&1 && echo "exit: $?" || echo "exit: $?"
+            fi
+          done
+          for f in debuggee/build/rust-debuggee.exe debuggee/build/Debug/rust-debuggee.exe; do
+            if [ -f "$f" ]; then
+              echo "=== $f ==="
+              "$BIN/llvm-objdump.exe" -p "$f" | grep "DLL Name" || true
+              echo "--- Running: $f stdio ---"
+              "$f" stdio 2>&1 && echo "exit: $?" || echo "exit: $?"
+            fi
+          done
+
       # macOS 14+ (Sonoma): debuggers need task_for_pid, which requires the
       # *debuggee* to have com.apple.security.get-task-allow.  Without it,
       # lldb-dap hangs at launch (can't attach) and CodeLLDB can launch but

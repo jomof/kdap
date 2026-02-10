@@ -3,7 +3,9 @@ package com.github.jomof
 import com.github.jomof.dap.DapFraming
 import com.github.jomof.dap.DapSession
 import com.github.jomof.dap.DapSession.RequestAction
+import com.github.jomof.dap.messages.*
 import kotlinx.coroutines.*
+import org.json.JSONObject
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
@@ -103,6 +105,18 @@ class DapSessionTest {
         pipes.clientOut.close()
         pipes.backendOut.close()
         job.join()
+    }
+
+    /**
+     * Asserts that two JSON strings are semantically equivalent (same keys
+     * and values, regardless of key order). Used for interceptor-generated
+     * messages where serialization order may differ from test helpers.
+     */
+    private fun assertJsonEquals(expected: String, actual: String?, message: String) {
+        assertNotNull(actual, message)
+        val expectedObj = JSONObject(expected)
+        val actualObj = JSONObject(actual!!)
+        assertTrue(expectedObj.similar(actualObj), "$message\nExpected: $expected\nActual:   $actual")
     }
 
     // ── Pass-through tests ───────────────────────────────────────────────
@@ -214,7 +228,10 @@ class DapSessionTest {
 
     @Test
     fun `interceptor handles request locally without forwarding`() = runBlocking {
-        val localResponse = dapResponse(1, "initialize")
+        val localResponse = DapResponse(
+            seq = 0, requestSeq = 1, command = "initialize",
+            success = true, body = emptyMap(),
+        )
         val interceptor = DapSession.Interceptor { RequestAction.Respond(localResponse) }
 
         TestPipes(interceptor).use { pipes ->
@@ -225,7 +242,10 @@ class DapSessionTest {
 
             // Client should receive the interceptor's response
             val received = readMessage(pipes.clientIn)
-            assertEquals(localResponse, received, "Client should receive the interceptor's local response")
+            assertJsonEquals(
+                dapResponse(1, "initialize"), received,
+                "Client should receive the interceptor's local response"
+            )
 
             // Shut down and verify nothing was forwarded to backend
             shutdownAndJoin(pipes, job)
@@ -240,8 +260,13 @@ class DapSessionTest {
     fun `interceptor mixes local and forwarded requests`() = runBlocking {
         val interceptor = DapSession.Interceptor { request ->
             // Handle "initialize" locally; forward everything else
-            if (request.contains("\"command\":\"initialize\"")) {
-                RequestAction.Respond(dapResponse(1, "initialize"))
+            if (request is InitializeRequest) {
+                RequestAction.Respond(
+                    DapResponse(
+                        seq = 0, requestSeq = request.seq, command = "initialize",
+                        success = true, body = emptyMap(),
+                    )
+                )
             } else {
                 RequestAction.Forward
             }
@@ -253,7 +278,7 @@ class DapSessionTest {
             // First: initialize → handled locally
             DapFraming.writeMessage(pipes.clientOut, dapRequest(1, "initialize"))
             val localReply = readMessage(pipes.clientIn)
-            assertEquals(
+            assertJsonEquals(
                 dapResponse(1, "initialize"), localReply,
                 "Initialize should be handled locally by the interceptor"
             )
@@ -277,9 +302,9 @@ class DapSessionTest {
     @Test
     fun `interceptor transforms request before forwarding`() = runBlocking {
         val interceptor = DapSession.Interceptor { request ->
-            // Rewrite "foo" command to "bar" before forwarding
-            if (request.contains("\"command\":\"foo\"")) {
-                RequestAction.ForwardModified(request.replace("\"command\":\"foo\"", "\"command\":\"bar\""))
+            // Rewrite unknown "foo" command to "bar" before forwarding
+            if (request is UnknownRequest && request.command == "foo") {
+                RequestAction.ForwardModified(UnknownRequest(request.seq, "bar"))
             } else {
                 RequestAction.Forward
             }
@@ -293,8 +318,12 @@ class DapSessionTest {
 
             // Backend should receive it rewritten as "bar"
             val received = readMessage(pipes.backendIn)
-            val expected = dapRequest(1, "bar")
-            assertEquals(expected, received, "Backend should receive the transformed request")
+            assertNotNull(received, "Backend should receive a message")
+            val receivedJson = JSONObject(received!!)
+            assertEquals("bar", receivedJson.getString("command"),
+                "Backend should receive the transformed request with command 'bar'")
+            assertEquals(1, receivedJson.getInt("seq"),
+                "Seq should be preserved in the transformed request")
 
             shutdownAndJoin(pipes, job)
         }

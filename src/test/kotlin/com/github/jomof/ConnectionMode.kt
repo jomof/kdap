@@ -138,7 +138,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                     r.lineSequence().forEach { stderrBuf.appendLine(it) }
                 }
             }
-            val socket = TcpTestUtils.connectToPort(port).apply { soTimeout = 10_000 }
+            val socket = TcpTestUtils.connectToPort(port, expectedProcess = process).apply { soTimeout = 10_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
                 override val outputStream: OutputStream = socket.getOutputStream()
@@ -194,7 +194,25 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                     e.printStackTrace(System.err)
                 }
             }
-            val socket = TcpTestUtils.connectToPort(port, 10_000).apply { soTimeout = 10_000 }
+            // Poll for connectivity, checking the server thread is still alive.
+            // If the thread died (e.g. BindException), fail immediately instead
+            // of waiting for timeout (which could connect to a stale server on
+            // the same port from a previous test).
+            val socket = run {
+                val deadline = System.currentTimeMillis() + 10_000
+                while (System.currentTimeMillis() < deadline) {
+                    serverError.get()?.let { throw it }
+                    if (!serverThread.isAlive) {
+                        error("KDAP in-process server thread died before accepting connections on port $port")
+                    }
+                    try {
+                        return@run java.net.Socket("127.0.0.1", port)
+                    } catch (_: Exception) {
+                        Thread.sleep(20)
+                    }
+                }
+                error("Port $port did not become reachable within 10000ms")
+            }.apply { soTimeout = 10_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
                 override val outputStream: OutputStream = socket.getOutputStream()
@@ -267,7 +285,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                     r.lineSequence().forEach { stderrBuf.appendLine(it) }
                 }
             }
-            val socket = TcpTestUtils.connectToPort(port, 30_000).apply { soTimeout = 15_000 }
+            val socket = TcpTestUtils.connectToPort(port, 30_000, expectedProcess = process).apply { soTimeout = 15_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
                 override val outputStream: OutputStream = socket.getOutputStream()

@@ -2,7 +2,9 @@ package com.github.jomof.dap
 
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.BindException
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 
@@ -24,15 +26,42 @@ sealed class Transport {
         }
     }
 
-    /** DAP over TCP: listen on [port], accept one connection, then use that socket. */
+    /**
+     * DAP over TCP: listen on [port], accept one connection, then use that socket.
+     *
+     * Retries the bind up to [MAX_BIND_RETRIES] times with back-off to handle
+     * transient port conflicts (e.g., a previous test's server still releasing
+     * the port). `SO_REUSEADDR` is set to handle TIME_WAIT overlap.
+     */
     data class TcpListen(val port: Int) : Transport() {
         override fun run(block: (InputStream, OutputStream) -> Unit) {
-            ServerSocket(port, 1, InetAddress.getLoopbackAddress()).use { server ->
+            val server = ServerSocket()
+            server.reuseAddress = true
+            var lastException: BindException? = null
+            for (attempt in 1..MAX_BIND_RETRIES) {
+                try {
+                    server.bind(InetSocketAddress(InetAddress.getLoopbackAddress(), port), 1)
+                    lastException = null
+                    break
+                } catch (e: BindException) {
+                    lastException = e
+                    if (attempt < MAX_BIND_RETRIES) {
+                        Thread.sleep(BIND_RETRY_DELAY_MS * attempt)
+                    }
+                }
+            }
+            if (lastException != null) throw lastException
+            server.use {
                 val socket = server.accept()
                 socket.use {
                     block(socket.getInputStream(), socket.getOutputStream())
                 }
             }
+        }
+
+        companion object {
+            private const val MAX_BIND_RETRIES = 5
+            private const val BIND_RETRY_DELAY_MS = 200L
         }
     }
 

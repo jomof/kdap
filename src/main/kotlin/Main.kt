@@ -42,7 +42,7 @@ fun mainImpl(args: Array<String>) {
             config.transport,
             lldbDap.inputStream,
             lldbDap.outputStream,
-            KdapInterceptor,
+            KdapInterceptor(),
         )
     } finally {
         lldbDap.close()

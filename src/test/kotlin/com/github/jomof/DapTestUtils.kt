@@ -1,25 +1,58 @@
 package com.github.jomof
 
-import com.github.jomof.dap.KdapInterceptor
+import com.github.jomof.dap.interception.TriggerErrorHandler
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 
 /** Shared DAP message helpers for tests. */
 object DapTestUtils {
+
+    /**
+     * Resolves the debuggee binary built by cmake.
+     * Throws if not found — run: `cmake -B debuggee/build debuggee && cmake --build debuggee/build`
+     */
+    fun resolveDebuggeeBinary(): File {
+        val cwd = File(System.getProperty("user.dir"))
+        return listOf(
+            File(cwd, "debuggee/build/debuggee"),
+            File(cwd, "debuggee/build/debuggee.exe"),       // Windows
+            File(cwd, "debuggee/build/Debug/debuggee.exe"), // MSVC multi-config
+        ).firstOrNull { it.isFile && it.canExecute() }
+            ?: error("debuggee binary not found — run: cmake -B debuggee/build debuggee && cmake --build debuggee/build")
+    }
+
     private const val CONTENT_LENGTH_PREFIX = "Content-Length: "
 
-    /** DAP initialize request (same format for our server and lldb-dap). */
-    fun sendInitializeRequest(output: OutputStream) {
-        sendRequest(output, """{"type":"request","seq":1,"command":"initialize","arguments":{"adapterID":"lldb","pathFormat":"path"}}""")
+    /**
+     * DAP initialize request (same format for our server and lldb-dap).
+     *
+     * @param supportsRunInTerminal when true, advertises the
+     *   `supportsRunInTerminalRequest` client capability so the adapter
+     *   may send `runInTerminal` reverse requests for terminal modes.
+     */
+    fun sendInitializeRequest(output: OutputStream, supportsRunInTerminal: Boolean = false) {
+        val args = JSONObject().apply {
+            put("adapterID", "lldb")
+            put("pathFormat", "path")
+            if (supportsRunInTerminal) put("supportsRunInTerminalRequest", true)
+        }
+        val json = JSONObject().apply {
+            put("type", "request")
+            put("seq", 1)
+            put("command", "initialize")
+            put("arguments", args)
+        }
+        sendRequest(output, json.toString())
     }
 
     /** Sends a request that causes our server to hit its catch block (internal error response). */
     fun sendTriggerErrorRequest(output: OutputStream) {
-        sendRequest(output, """{"type":"request","seq":42,"command":"${KdapInterceptor.METHOD_TRIGGER_ERROR}","arguments":{}}""")
+        sendRequest(output, """{"type":"request","seq":42,"command":"${TriggerErrorHandler.METHOD_TRIGGER_ERROR}","arguments":{}}""")
     }
 
     /** Unknown command (lldb-dap returns success: false; our server returns method not found). */
@@ -284,6 +317,21 @@ object DapTestUtils {
         sendRequest(output, json.toString())
     }
 
+    /**
+     * Sends a success response for a `runInTerminal` reverse request.
+     */
+    fun sendRunInTerminalResponse(output: OutputStream, requestSeq: Int) {
+        val json = JSONObject().apply {
+            put("type", "response")
+            put("seq", 0)
+            put("request_seq", requestSeq)
+            put("command", "runInTerminal")
+            put("success", true)
+            put("body", JSONObject())
+        }
+        sendRequest(output, json.toString())
+    }
+
     /** Sends a DAP `configurationDone` request. */
     fun sendConfigurationDoneRequest(output: OutputStream, seq: Int) {
         val json = JSONObject().apply {
@@ -338,7 +386,7 @@ object DapTestUtils {
     }
 
     /** DAP error response: success false, message (internal error or method not found). */
-    fun assertInternalErrorResponse(responseBody: String, expectedMessage: String = KdapInterceptor.INTERNAL_ERROR_MESSAGE) {
+    fun assertInternalErrorResponse(responseBody: String, expectedMessage: String = TriggerErrorHandler.INTERNAL_ERROR_MESSAGE) {
         org.junit.jupiter.api.Assertions.assertTrue(
             responseBody.contains("\"success\":false"),
             "Response should be error: $responseBody"

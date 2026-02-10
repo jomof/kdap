@@ -1,11 +1,9 @@
 package com.github.jomof
 
 import org.json.JSONObject
-import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.EnumSource
-import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.TimeUnit
@@ -33,30 +31,12 @@ import java.util.concurrent.TimeUnit
 @Timeout(value = 120, unit = TimeUnit.SECONDS)
 class DapLaunchTest {
 
-    companion object {
-        /**
-         * Resolves the debuggee binary built by cmake. Returns null if not found.
-         */
-        fun resolveDebuggeeBinary(): File? {
-            val cwd = File(System.getProperty("user.dir"))
-            val candidates = listOf(
-                File(cwd, "debuggee/build/debuggee"),
-                File(cwd, "debuggee/build/debuggee.exe"),       // Windows
-                File(cwd, "debuggee/build/Debug/debuggee.exe"), // MSVC multi-config
-            )
-            return candidates.firstOrNull { it.isFile && it.canExecute() }
-        }
-    }
-
     @ParameterizedTest(name = "{0}")
     @EnumSource(ConnectionMode::class)
     fun `launch program runs to terminated event`(mode: ConnectionMode) {
-        val debuggee = resolveDebuggeeBinary()
-        assertNotNull(debuggee) {
-            "debuggee binary not found — run: cmake -B debuggee/build debuggee && cmake --build debuggee/build"
-        }
+        val debuggee = DapTestUtils.resolveDebuggeeBinary()
         mode.connect().use { ctx ->
-            runLaunchToTerminated(ctx, mode, debuggee!!.absolutePath)
+            runLaunchToTerminated(ctx, mode, debuggee.absolutePath)
         }
     }
 
@@ -114,11 +94,10 @@ class DapLaunchTest {
 
             // If we get here, the full launch lifecycle completed successfully.
         } catch (e: Exception) {
-            val diag = try { ctx.diagnostics() } catch (_: Exception) { "(diagnostics unavailable)" }
             val log = messageLog.joinToString("\n  ", prefix = "  ")
             throw AssertionError(
                 "[$mode] Failed during phase: $phase\n" +
-                "DAP message log (${messageLog.size} entries):\n$log\n$diag", e
+                "DAP message log (${messageLog.size} entries):\n$log\n${ctx.diagnostics()}", e
             )
         }
     }

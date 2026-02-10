@@ -1,59 +1,70 @@
 package com.github.jomof.dap
 
 import com.github.jomof.dap.DapSession.RequestAction
+import com.github.jomof.dap.interception.*
+import com.github.jomof.dap.messages.DapMessage
+import com.github.jomof.dap.messages.DapRequest
 
 /**
- * Production interceptor for KDAP. Sits between the client and `lldb-dap`,
- * translating CodeLLDB-compatible requests into the form that `lldb-dap`
- * understands.
+ * Production interceptor for KDAP. Composes an ordered list of
+ * [InterceptionHandler]s, each encapsulating a single concern with its
+ * own state.
  *
- * ## CodeLLDB `_command` context
+ * ## Composition semantics
  *
- * CodeLLDB uses `evaluate` with `context: "_command"` to run LLDB commands
- * and return their output in the response body. `lldb-dap` uses the standard
- * `"repl"` context for the same purpose. This interceptor rewrites `_command`
- * to `repl` so clients accustomed to CodeLLDB work transparently.
+ * **Requests**: every handler's [InterceptionHandler.onRequest] is called
+ * so all can observe (e.g., to capture state). The first non-[RequestAction.Forward]
+ * result is used as the action.
  *
- * ## `_triggerError` (test hook)
+ * **Backend messages**: handlers chain via `flatMap` — each handler
+ * processes every message in the list produced by the previous handler,
+ * allowing multiple handlers to inject messages at different points
+ * without conflicting.
  *
- * The `_triggerError` command is handled locally to exercise KDAP's own
- * error-response path without involving the backend.
+ * ## Default handlers
+ *
+ * - [EvaluateContextRewriter] — rewrites CodeLLDB `_command` to `repl`
+ * - [TriggerErrorHandler] — test hook for error-response path
+ * - [ConsoleModeHandler] — injects console mode announcement
+ * - [LaunchEventsHandler] — injects launch status output events
+ * - [ProcessEventHandler] — replaces `process` event with `continued`
+ * - [ExitStatusHandler] — reformats process exit output to match CodeLLDB
+ * - [OutputCoalescingHandler] — combines consecutive stdout/stderr output events
+ * - [LaunchResponseOrderHandler] — reorders launch/configDone responses to match CodeLLDB
  */
-object KdapInterceptor : DapSession.Interceptor {
+class KdapInterceptor(
+    private val handlers: List<InterceptionHandler> = defaultHandlers(),
+) : DapSession.Interceptor {
 
-    /** Test-only command intercepted locally to exercise KDAP's error-response path. */
-    const val METHOD_TRIGGER_ERROR = "_triggerError"
-
-    /** Error message returned by [METHOD_TRIGGER_ERROR]. */
-    const val INTERNAL_ERROR_MESSAGE = "triggered internal error"
-
-    private val COMMAND_REGEX = """"command"\s*:\s*"([^"]+)"""".toRegex()
-    private val SEQ_REGEX = """"seq"\s*:\s*(\d+)""".toRegex()
-    private val COMMAND_CONTEXT_REGEX = """"context"\s*:\s*"_command"""".toRegex()
-
-    override fun onRequest(request: String): RequestAction {
-        val command = COMMAND_REGEX.find(request)?.groupValues?.get(1)
-
-        // Test hook: handle _triggerError locally so the error-handling test
-        // works without forwarding to the backend.
-        if (command == METHOD_TRIGGER_ERROR) {
-            val requestSeq = SEQ_REGEX.find(request)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            return RequestAction.Respond(
-                buildErrorResponse(requestSeq, command, INTERNAL_ERROR_MESSAGE)
-            )
+    override fun onRequest(request: DapRequest): RequestAction {
+        var result: RequestAction = RequestAction.Forward
+        for (handler in handlers) {
+            val action = handler.onRequest(request)
+            if (result is RequestAction.Forward && action !is RequestAction.Forward) {
+                result = action
+            }
         }
-
-        // Rewrite CodeLLDB-style _command context to lldb-dap's repl context.
-        if (command == "evaluate" && COMMAND_CONTEXT_REGEX.containsMatchIn(request)) {
-            val modified = COMMAND_CONTEXT_REGEX.replace(request, """"context":"repl"""")
-            return RequestAction.ForwardModified(modified)
-        }
-
-        return RequestAction.Forward
+        return result
     }
 
-    private fun buildErrorResponse(requestSeq: Int, command: String, message: String): String {
-        val escaped = message.replace("\\", "\\\\").replace("\"", "\\\"")
-        return """{"type":"response","request_seq":$requestSeq,"seq":0,"command":"$command","success":false,"message":"$escaped"}"""
+    override fun onBackendMessage(message: DapMessage): List<DapMessage> {
+        var messages = listOf(message)
+        for (handler in handlers) {
+            messages = messages.flatMap { handler.onBackendMessage(it) }
+        }
+        return messages
+    }
+
+    companion object {
+        fun defaultHandlers(): List<InterceptionHandler> = listOf(
+            EvaluateContextRewriter(),
+            TriggerErrorHandler(),
+            ConsoleModeHandler(),
+            LaunchEventsHandler(),
+            ProcessEventHandler(),              // must follow LaunchEventsHandler
+            ExitStatusHandler(),               // reformats exit output before coalescing
+            OutputCoalescingHandler(),         // combines consecutive stdout/stderr events
+            LaunchResponseOrderHandler(),       // must be last (sees ContinuedEvent from ProcessEventHandler)
+        )
     }
 }

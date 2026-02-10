@@ -1,5 +1,7 @@
 package com.github.jomof.dap
 
+import com.github.jomof.dap.messages.DapMessage
+import com.github.jomof.dap.messages.DapRequest
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.selects.select
@@ -14,14 +16,24 @@ import java.util.logging.Logger
  *
  * ## Message flow
  *
- * - Client requests are read by [clientReader], passed to the [interceptor],
- *   and either handled locally (response sent to client) or forwarded to
- *   the backend via the `toBackend` channel.
- * - Backend messages (responses and events) are read by [backendReader] and
- *   forwarded to the client via the `toClient` channel.
+ * - Client requests are read by [clientReader], parsed into typed
+ *   [DapRequest] objects, and passed to the [interceptor]. The interceptor
+ *   decides whether to forward the original request, handle it locally
+ *   (sending a response directly to the client), or forward a modified
+ *   version.
+ * - Backend messages (responses and events) are read by [backendReader],
+ *   parsed into typed [DapMessage] objects, and passed to the interceptor
+ *   which may inject additional messages before/after.
  * - Two dedicated writer coroutines ([clientWriter] and [backendWriter])
  *   are the sole writers to their respective output streams, eliminating
  *   the need for explicit locking.
+ *
+ * ## Raw JSON passthrough
+ *
+ * For forwarded messages, the original raw JSON string is sent to preserve
+ * perfect wire fidelity (no re-serialization). Serialization via
+ * [DapMessage.toJson] is only used for interceptor-created or modified
+ * messages.
  *
  * ## Shutdown
  *
@@ -58,25 +70,47 @@ class DapSession(
         data object Forward : RequestAction()
 
         /** Send this response directly to the client; do not forward to the backend. */
-        data class Respond(val response: String) : RequestAction()
+        data class Respond(val response: DapMessage) : RequestAction()
 
         /** Forward a modified version of the request to the backend. */
-        data class ForwardModified(val modifiedRequest: String) : RequestAction()
+        data class ForwardModified(val modifiedRequest: DapRequest) : RequestAction()
     }
 
     /**
      * Per-request decision point. Examines each client request and decides
      * whether to forward it, handle it locally, or transform it before
-     * forwarding.
+     * forwarding. Also observes backend messages (responses and events)
+     * before they reach the client, with the ability to inject additional
+     * messages.
      */
     fun interface Interceptor {
         /**
          * Called for each DAP request read from the client.
          *
-         * @param request the raw JSON body of the DAP request
+         * @param request the parsed, typed DAP request
          * @return a [RequestAction] indicating how to handle this request
          */
-        fun onRequest(request: String): RequestAction
+        fun onRequest(request: DapRequest): RequestAction
+
+        /**
+         * Called for each DAP message (response or event) read from the
+         * backend before it is sent to the client. Returns the list of
+         * messages that should actually be sent to the client.
+         *
+         * The default implementation forwards the message unchanged. Override
+         * to inject additional messages before or after the backend message,
+         * filter messages, or transform them.
+         *
+         * Examples:
+         * - `listOf(message)` — forward unchanged (default)
+         * - `listOf(extra, message)` — inject a message before
+         * - `listOf(message, extra)` — inject a message after
+         * - `emptyList()` — suppress the message entirely
+         *
+         * @param message the parsed, typed DAP message from the backend
+         * @return messages to send to the client, in order
+         */
+        fun onBackendMessage(message: DapMessage): List<DapMessage> = listOf(message)
 
         companion object {
             /** Forwards every request to the backend without modification. */
@@ -98,15 +132,22 @@ class DapSession(
         val clientWriterJob = launchWriter("clientWriter", toClient, clientOutput)
         val backendWriterJob = launchWriter("backendWriter", toBackend, backendOutput)
 
-        val backendReaderJob = launchReader("backendReader", backendInput) { message ->
-            toClient.send(message)
+        val backendReaderJob = launchReader("backendReader", backendInput) { rawJson ->
+            val message = DapMessage.parse(rawJson)
+            val results = interceptor.onBackendMessage(message)
+            for (msg in results) {
+                // Identity check: if the interceptor returned the same object,
+                // use the original raw JSON for perfect wire fidelity.
+                toClient.send(if (msg === message) rawJson else msg.toJson())
+            }
         }
 
-        val clientReaderJob = launchReader("clientReader", clientInput) { message ->
-            when (val action = interceptor.onRequest(message)) {
-                is RequestAction.Forward -> toBackend.send(message)
-                is RequestAction.Respond -> toClient.send(action.response)
-                is RequestAction.ForwardModified -> toBackend.send(action.modifiedRequest)
+        val clientReaderJob = launchReader("clientReader", clientInput) { rawJson ->
+            val request = DapMessage.parse(rawJson) as DapRequest
+            when (val action = interceptor.onRequest(request)) {
+                is RequestAction.Forward -> toBackend.send(rawJson)
+                is RequestAction.Respond -> toClient.send(action.response.toJson())
+                is RequestAction.ForwardModified -> toBackend.send(action.modifiedRequest.toJson())
             }
         }
 

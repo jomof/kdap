@@ -121,8 +121,7 @@ class DapInitializeTest {
                     "Initialize capabilities differ from baseline ($mode):\n$diff\n\nActual capabilities:\n${actualCapabilities.toString(2)}"
                 }
             } catch (e: Exception) {
-                val diag = try { ctx.diagnostics() } catch (_: Exception) { "(diagnostics unavailable)" }
-                throw AssertionError("[$mode] Failed during initialize\n$diag", e)
+                throw AssertionError("[$mode] Failed during initialize\n${ctx.diagnostics()}", e)
             }
         }
     }
@@ -137,8 +136,7 @@ class DapInitializeTest {
                 val responseBody = DapTestUtils.readResponseBody(ctx.inputStream)
                 DapTestUtils.assertInternalErrorResponse(responseBody)
             } catch (e: Exception) {
-                val diag = try { ctx.diagnostics() } catch (_: Exception) { "(diagnostics unavailable)" }
-                throw AssertionError("[$mode] Failed during triggerError test\n$diag", e)
+                throw AssertionError("[$mode] Failed during triggerError test\n${ctx.diagnostics()}", e)
             }
         }
     }

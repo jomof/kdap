@@ -11,7 +11,6 @@ on:
 
 env:
   LLVM_VERSION: "21"           # major version for apt / brew
-  LLVM_VERSION_FULL: "21.1.8"  # exact version for GitHub release tarball (Windows)
 
 jobs:
   build:
@@ -23,8 +22,7 @@ jobs:
             platform_id: linux-x64
           - os: macos-latest
             platform_id: darwin-arm64
-          - os: windows-latest
-            platform_id: win32-x64
+
 
     runs-on: ${{ matrix.os }}
     defaults:
@@ -73,27 +71,7 @@ jobs:
           echo "--- Verify ---"
           lldb-install/darwin-arm64/bin/lldb --version
 
-      # lldb-dap.exe (from the LLVM release tarball) links against python310.dll.
-      - name: Set up Python 3.10 (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
 
-      - name: Install LLDB (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          ARCHIVE="clang+llvm-${LLVM_VERSION_FULL}-x86_64-pc-windows-msvc.tar.xz"
-          URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION_FULL}/${ARCHIVE}"
-          echo "Downloading $URL ..."
-          curl -fSL --connect-timeout 60 --max-time 600 -o "$ARCHIVE" "$URL"
-          mkdir -p lldb-install/win32-x64
-          echo "Extracting ..."
-          tar -xJf "$ARCHIVE" -C lldb-install/win32-x64 --strip-components=1
-          echo "--- Verify ---"
-          ls lldb-install/win32-x64/bin/lldb.exe \
-             lldb-install/win32-x64/bin/lldb-dap.exe \
-             lldb-install/win32-x64/bin/lldb-server.exe
 
       # Compile Kotlin, download CodeLLDB, and build debuggee in parallel.
       - name: Compile, download CodeLLDB, and build debuggee in parallel

@@ -117,7 +117,6 @@ private fun ConnectionMode.label(): String {
         ConnectionMode.STDIO, ConnectionMode.STDIO_LLDB, ConnectionMode.STDIO_CODELDB -> "stdio"
         ConnectionMode.TCP_LISTEN   -> "tcp-listen"
         ConnectionMode.TCP_CONNECT  -> "tcp-connect"
-        ConnectionMode.TCP_CODELDB  -> "tcp"
         ConnectionMode.IN_PROCESS   -> "in-process/tcp"
     }
     return "$product ($transport)"

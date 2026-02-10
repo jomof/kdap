@@ -1,7 +1,6 @@
 package com.github.jomof
 
 import java.io.File
-import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
 
 /**
@@ -64,27 +63,4 @@ object CodeLldbHarness {
         if (process.isAlive) process.destroyForcibly()
     }
 
-    /**
-     * Starts the CodeLLDB adapter in TCP listen mode (--port N).
-     *
-     * Retries up to [MAX_PORT_RETRIES] times with different ports to avoid
-     * TOCTOU races where the port is grabbed between discovery and bind.
-     * After starting, waits briefly and verifies the process is still alive
-     * (a bind failure typically kills the process quickly).
-     */
-    fun startAdapterTcp(): Pair<Process, Int> {
-        repeat(MAX_PORT_RETRIES) {
-            val port = ServerSocket(0).use { it.localPort }
-            val process = startAdapter("--port", port.toString())
-            // Native adapters bind quickly; give it time to fail.
-            Thread.sleep(PORT_BIND_CHECK_MS)
-            if (process.isAlive) return process to port
-            // Process died — likely port conflict. Clean up and retry.
-            process.destroyForcibly()
-        }
-        error("Failed to start CodeLLDB adapter in TCP mode after $MAX_PORT_RETRIES attempts (port conflicts)")
-    }
-
-    private const val MAX_PORT_RETRIES = 3
-    private const val PORT_BIND_CHECK_MS = 300L
 }

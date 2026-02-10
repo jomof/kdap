@@ -1,9 +1,16 @@
 package com.github.jomof
 
+import com.github.jomof.dap.DapServer
+import com.github.jomof.dap.KdapInterceptor
+import com.github.jomof.dap.LldbDapProcess
+import com.github.jomof.dap.Transport
 import java.io.BufferedInputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.ServerSocket
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 /**
@@ -128,24 +135,23 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             }
         }
     },
-    /** Connects to KDAP adapter via TCP (--port N). */
+    /**
+     * Connects to KDAP adapter via TCP using `--port 0` (OS-assigned port).
+     * The actual port is discovered from stderr (`Listening on port <N>`),
+     * eliminating the TOCTOU race that plagued the old approach of finding
+     * a free port then hoping it's still free when the server binds.
+     */
     TCP_LISTEN(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
-            val (process, port) = KdapHarness.startAdapterTcp()
-            val stderrBuf = StringBuilder()
-            kotlin.concurrent.thread(isDaemon = true) {
-                process.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
-                    r.lineSequence().forEach { stderrBuf.appendLine(it) }
-                }
-            }
-            val socket = TcpTestUtils.connectToPort(port, expectedProcess = process).apply { soTimeout = 10_000 }
+            val result = KdapHarness.startAdapterTcp()
+            val socket = TcpTestUtils.connectToPort(result.port, expectedProcess = result.process).apply { soTimeout = 10_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
                 override val outputStream: OutputStream = socket.getOutputStream()
-                override fun diagnostics(): String = processDiagnostics("kdap", process, stderr = stderrBuf)
+                override fun diagnostics(): String = processDiagnostics("kdap", result.process, stderr = result.stderrBuf)
                 override fun close() {
                     socket.close()
-                    KdapHarness.stopProcess(process)
+                    KdapHarness.stopProcess(result.process)
                 }
             }
         }
@@ -176,43 +182,48 @@ enum class ConnectionMode(val serverKind: ServerKind) {
         }
     },
     /**
-     * Runs KDAP in-process by calling [main] directly in a thread, using TCP
-     * (--port) instead of stdio. This avoids System.in/out redirection entirely.
+     * Runs KDAP in-process by calling the [DapServer] API directly in a
+     * thread, using TCP listen with port 0 (OS-assigned). The actual bound
+     * port is discovered via the [Transport.TcpListen.onBound] callback,
+     * eliminating the TOCTOU race that plagued the old find-then-bind approach.
      */
     IN_PROCESS(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
             val lldbDapPath = LldbDapHarness.resolveLldbDapPath()
                 ?: error("lldb-dap not found (run scripts/download-lldb.sh or set KDAP_LLDB_ROOT)")
-            val port = java.net.ServerSocket(0).use { it.localPort }
-            val serverError = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+            val portHolder = AtomicInteger(0)
+            val portReady = CountDownLatch(1)
+            val transport = Transport.TcpListen(0, onBound = { port ->
+                portHolder.set(port)
+                portReady.countDown()
+            })
+            val serverError = AtomicReference<Throwable?>(null)
             val serverThread = thread(name = "kdap-in-process") {
                 try {
-                    mainImpl(arrayOf("--port", port.toString(), "--lldb-dap", lldbDapPath.absolutePath))
+                    val lldbDap = LldbDapProcess.start(lldbDapPath)
+                    try {
+                        DapServer.runDecorator(
+                            transport,
+                            lldbDap.inputStream,
+                            lldbDap.outputStream,
+                            KdapInterceptor(),
+                        )
+                    } finally {
+                        lldbDap.close()
+                    }
                 } catch (e: Throwable) {
                     serverError.set(e)
-                    System.err.println("[KDAP IN_PROCESS] main() threw: $e")
+                    portReady.countDown() // unblock waiting thread on failure
+                    System.err.println("[KDAP IN_PROCESS] server threw: $e")
                     e.printStackTrace(System.err)
                 }
             }
-            // Poll for connectivity, checking the server thread is still alive.
-            // If the thread died (e.g. BindException), fail immediately instead
-            // of waiting for timeout (which could connect to a stale server on
-            // the same port from a previous test).
-            val socket = run {
-                val deadline = System.currentTimeMillis() + 10_000
-                while (System.currentTimeMillis() < deadline) {
-                    serverError.get()?.let { throw it }
-                    if (!serverThread.isAlive) {
-                        error("KDAP in-process server thread died before accepting connections on port $port")
-                    }
-                    try {
-                        return@run java.net.Socket("127.0.0.1", port)
-                    } catch (_: Exception) {
-                        Thread.sleep(20)
-                    }
-                }
-                error("Port $port did not become reachable within 10000ms")
-            }.apply { soTimeout = 10_000 }
+            if (!portReady.await(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                error("KDAP in-process server did not bind within 10s")
+            }
+            serverError.get()?.let { throw it }
+            val port = portHolder.get()
+            val socket = java.net.Socket("127.0.0.1", port).apply { soTimeout = 10_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
                 override val outputStream: OutputStream = socket.getOutputStream()
@@ -273,30 +284,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             }
         }
     },
-    /** Connects to CodeLLDB adapter via TCP (adapter --port N). */
-    TCP_CODELDB(ServerKind.CODELDB) {
-        override fun connect(): ConnectionContext {
-            if (!CodeLldbHarness.isAvailable())
-                throw IllegalStateException("CodeLLDB adapter not available (run scripts/download-codelldb-vsix.sh or set KDAP_CODELDB_EXTENSION)")
-            val (process, port) = CodeLldbHarness.startAdapterTcp()
-            val stderrBuf = StringBuilder()
-            kotlin.concurrent.thread(isDaemon = true) {
-                process.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
-                    r.lineSequence().forEach { stderrBuf.appendLine(it) }
-                }
-            }
-            val socket = TcpTestUtils.connectToPort(port, 30_000, expectedProcess = process).apply { soTimeout = 15_000 }
-            return object : ConnectionContext {
-                override val inputStream: InputStream = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
-                override val outputStream: OutputStream = socket.getOutputStream()
-                override fun diagnostics(): String = processDiagnostics("codelldb", process, stderr = stderrBuf)
-                override fun close() {
-                    socket.close()
-                    CodeLldbHarness.stopProcess(process)
-                }
-            }
-        }
-    };
+    ;
 
     abstract fun connect(): ConnectionContext
 
@@ -311,7 +299,6 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             STDIO, STDIO_LLDB, STDIO_CODELDB -> "stdio"
             TCP_LISTEN                       -> "tcp-listen"
             TCP_CONNECT                      -> "tcp-connect"
-            TCP_CODELDB                      -> "tcp"
             IN_PROCESS                       -> "in-process/tcp"
         }
         return "$product ($transport)"

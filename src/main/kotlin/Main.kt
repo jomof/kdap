@@ -10,6 +10,10 @@ import java.io.File
  * Supports stdio (default), TCP listen (--port N), and TCP connect (--connect N),
  * matching CodeLLDB's command line. `--lldb-dap <path>` is required to specify
  * the `lldb-dap` executable.
+ *
+ * When `--port 0` is used, the OS assigns an available port. The actual port
+ * is printed to stderr as `Listening on port <N>` so callers can discover it
+ * without a TOCTOU race.
  */
 fun main(args: Array<String>) = mainImpl(args)
 
@@ -21,12 +25,22 @@ fun mainImpl(args: Array<String>) {
     val config = Cli.parse(args)
     if (config == null) {
         System.err.println("Usage: [--port N] | [--connect N] [--lldb-dap PATH]")
-        System.err.println("  --port N         Listen on port N, accept one connection")
+        System.err.println("  --port N         Listen on port N (use 0 for OS-assigned)")
         System.err.println("  --connect N      Connect to 127.0.0.1:N")
         System.err.println("  --lldb-dap PATH  Path to lldb-dap executable (required)")
         System.err.println("  (no args)        Use stdio")
         System.exit(1)
         return
+    }
+
+    // When using TCP listen, report the actual bound port to stderr.
+    // This is essential for --port 0 (OS-assigned) but also useful for
+    // confirming the port with an explicit value.
+    val transport = when (val t = config.transport) {
+        is Transport.TcpListen -> t.copy(onBound = { port ->
+            System.err.println("Listening on port $port")
+        })
+        else -> t
     }
 
     val lldbDapPath = config.lldbDapPath?.let { File(it) }
@@ -39,7 +53,7 @@ fun mainImpl(args: Array<String>) {
     val lldbDap = LldbDapProcess.start(lldbDapPath)
     try {
         DapServer.runDecorator(
-            config.transport,
+            transport,
             lldbDap.inputStream,
             lldbDap.outputStream,
             KdapInterceptor(),

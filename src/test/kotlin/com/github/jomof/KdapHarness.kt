@@ -1,7 +1,8 @@
 package com.github.jomof
 
+import java.io.BufferedReader
 import java.io.File
-import java.net.ServerSocket
+import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
 
 /**
@@ -16,6 +17,19 @@ import java.util.concurrent.TimeUnit
 object KdapHarness {
 
     private const val MAIN_CLASS = "com.github.jomof.MainKt"
+
+    /**
+     * Result of starting the KDAP adapter in TCP listen mode. Bundles the
+     * process, the actual bound port (read from stderr), and a [StringBuilder]
+     * that is continuously drained by a background thread. Callers should
+     * use [stderrBuf] for diagnostics instead of reading `process.errorStream`
+     * directly (it's already being consumed).
+     */
+    data class TcpAdapterResult(
+        val process: Process,
+        val port: Int,
+        val stderrBuf: StringBuilder,
+    )
 
     /**
      * Starts the KDAP adapter with [args] (e.g. empty for stdio, or "--port", port.toString()).
@@ -41,32 +55,64 @@ object KdapHarness {
     }
 
     /**
-     * Starts the KDAP adapter in TCP listen mode (--port N).
-     *
-     * Retries up to [MAX_PORT_RETRIES] times with different ports to avoid
-     * TOCTOU races where the port is grabbed between discovery and bind.
-     * After starting, waits briefly and verifies the process is still alive.
-     * KDAP is a JVM process so startup is slower than native CodeLLDB, but
-     * a BindException exits quickly via the [Transport.TcpListen] retry logic.
+     * Regex matching the "Listening on port <N>" line printed to stderr by
+     * KDAP when using `--port` (including `--port 0`).
      */
-    fun startAdapterTcp(): Pair<Process, Int> {
-        repeat(MAX_PORT_RETRIES) {
-            val port = ServerSocket(0).use { it.localPort }
-            val process = startAdapter("--port", port.toString())
-            // JVM processes take longer to start; the bind-retry in
-            // Transport.TcpListen gives the server ~2s to bind before
-            // giving up, so we don't need a long check here — just
-            // enough for a fast BindException to propagate.
-            Thread.sleep(PORT_BIND_CHECK_MS)
-            if (process.isAlive) return process to port
-            // Process died — likely port conflict. Clean up and retry.
-            process.destroyForcibly()
+    private val LISTENING_REGEX = Regex("""Listening on port (\d+)""")
+
+    /**
+     * Starts the KDAP adapter in TCP listen mode using `--port 0` so the OS
+     * assigns an available port. The actual bound port is read from the
+     * process's stderr (`Listening on port <N>`), eliminating the TOCTOU
+     * race that previously caused intermittent `BindException` failures.
+     *
+     * A background daemon thread continues draining stderr into [TcpAdapterResult.stderrBuf]
+     * after the port is discovered, so callers must not start their own stderr reader.
+     */
+    fun startAdapterTcp(): TcpAdapterResult {
+        val process = startAdapter("--port", "0")
+        val stderrBuf = StringBuilder()
+        val stderr = BufferedReader(InputStreamReader(process.errorStream))
+        val port = readPortFromStderr(stderr, process, stderrBuf)
+        // Continue draining remaining stderr in the background.
+        kotlin.concurrent.thread(isDaemon = true, name = "kdap-stderr-drain") {
+            try {
+                stderr.lineSequence().forEach { stderrBuf.appendLine(it) }
+            } catch (_: Exception) { /* process closed */ }
         }
-        error("Failed to start KDAP adapter in TCP mode after $MAX_PORT_RETRIES attempts (port conflicts)")
+        return TcpAdapterResult(process, port, stderrBuf)
     }
 
-    private const val MAX_PORT_RETRIES = 3
-    private const val PORT_BIND_CHECK_MS = 500L
+    /**
+     * Reads lines from [stderr] until the "Listening on port <N>" message
+     * appears, or the process dies. Lines read are appended to [buf] for
+     * diagnostics. Throws if the port cannot be determined.
+     */
+    private fun readPortFromStderr(stderr: BufferedReader, process: Process, buf: StringBuilder): Int {
+        val deadline = System.currentTimeMillis() + PORT_DISCOVERY_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            if (!process.isAlive) {
+                error("KDAP process exited with code ${process.exitValue()} before reporting port")
+            }
+            // Use ready() to avoid blocking indefinitely if the process
+            // doesn't print anything.
+            if (stderr.ready()) {
+                val line = stderr.readLine() ?: break
+                buf.appendLine(line)
+                val match = LISTENING_REGEX.find(line)
+                if (match != null) {
+                    return match.groupValues[1].toInt()
+                }
+            } else {
+                Thread.sleep(20)
+            }
+        }
+        if (process.isAlive) process.destroyForcibly()
+        error("KDAP process did not report 'Listening on port <N>' within ${PORT_DISCOVERY_TIMEOUT_MS}ms")
+    }
+
+    /** How long to wait for the server to report its port. */
+    private const val PORT_DISCOVERY_TIMEOUT_MS = 10_000L
 
     private fun resolveLldbDapPath(): String {
         val path = LldbDapHarness.resolveLldbDapPath()

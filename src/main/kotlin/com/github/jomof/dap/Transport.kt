@@ -2,7 +2,6 @@ package com.github.jomof.dap
 
 import java.io.InputStream
 import java.io.OutputStream
-import java.net.BindException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -29,39 +28,28 @@ sealed class Transport {
     /**
      * DAP over TCP: listen on [port], accept one connection, then use that socket.
      *
-     * Retries the bind up to [MAX_BIND_RETRIES] times with back-off to handle
-     * transient port conflicts (e.g., a previous test's server still releasing
-     * the port). `SO_REUSEADDR` is set to handle TIME_WAIT overlap.
+     * When [port] is `0`, the OS assigns an available port. The actual bound
+     * port is reported via [onBound] before accepting connections, so callers
+     * (or test harnesses) can discover it without a TOCTOU race.
+     *
+     * `SO_REUSEADDR` is set to handle TIME_WAIT overlap from previous runs.
      */
-    data class TcpListen(val port: Int) : Transport() {
+    data class TcpListen(
+        val port: Int,
+        /** Called with the actual bound port after the server socket is listening. */
+        val onBound: (Int) -> Unit = {},
+    ) : Transport() {
         override fun run(block: (InputStream, OutputStream) -> Unit) {
             val server = ServerSocket()
             server.reuseAddress = true
-            var lastException: BindException? = null
-            for (attempt in 1..MAX_BIND_RETRIES) {
-                try {
-                    server.bind(InetSocketAddress(InetAddress.getLoopbackAddress(), port), 1)
-                    lastException = null
-                    break
-                } catch (e: BindException) {
-                    lastException = e
-                    if (attempt < MAX_BIND_RETRIES) {
-                        Thread.sleep(BIND_RETRY_DELAY_MS * attempt)
-                    }
-                }
-            }
-            if (lastException != null) throw lastException
+            server.bind(InetSocketAddress(InetAddress.getLoopbackAddress(), port), 1)
+            onBound(server.localPort)
             server.use {
                 val socket = server.accept()
                 socket.use {
                     block(socket.getInputStream(), socket.getOutputStream())
                 }
             }
-        }
-
-        companion object {
-            private const val MAX_BIND_RETRIES = 5
-            private const val BIND_RETRY_DELAY_MS = 200L
         }
     }
 

@@ -131,17 +131,28 @@ fun ExpectedRequest(
  * Filters the raw message stream to interesting messages:
  * - [DapResponse]s (anchored to their arrival position)
  * - [DapEvent]s, excluding [ModuleEvent]s (non-deterministic count)
+ *   and blank [OutputEvent]s (trailing newline fragments from split writes)
  * - [RunInTerminalRequest]s (reverse requests from the adapter)
  *
  * Other [DapRequest]s are excluded (they originate from the client, not
  * the adapter). Every message type NOT excluded here must appear in the
  * expected sequence.
+ *
+ * Blank output events (containing only whitespace like `\r\n`) are excluded
+ * because output coalescing is non-deterministic: a debuggee's `"hello\n"`
+ * may arrive as one event or be split into `"hello"` + `"\r\n"` depending
+ * on platform, PTY settings, and timing. Filtering these artifacts makes
+ * sequence matching robust across environments.
  */
 fun filterToInterestingMessages(messages: List<DapMessage>): List<DapMessage> =
     messages.filter {
-        it is DapResponse
-                || (it is DapEvent && it !is ModuleEvent)
-                || it is RunInTerminalRequest
+        when {
+            it is OutputEvent && it.output.isBlank() -> false
+            it is DapResponse -> true
+            it is DapEvent && it !is ModuleEvent -> true
+            it is RunInTerminalRequest -> true
+            else -> false
+        }
     }
 
 // ── Full-match assertion ─────────────────────────────────────────────

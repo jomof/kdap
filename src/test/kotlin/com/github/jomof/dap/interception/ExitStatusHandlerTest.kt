@@ -34,6 +34,17 @@ class ExitStatusHandlerTest {
     }
 
     @Test
+    fun `reformats negative exit code (Windows)`() {
+        val input = OutputEvent.console("Process 5800 exited with status = -1 (0xffffffff) \n")
+        val result = handler.onBackendMessage(input)
+
+        assertEquals(1, result.size)
+        val output = assertInstanceOf(OutputEvent::class.java, result[0])
+        assertEquals("console", output.category)
+        assertEquals("Process exited with code -1.\n", output.output)
+    }
+
+    @Test
     fun `non-exit console output is forwarded unchanged`() {
         val input = OutputEvent.console("Launching: /usr/bin/test\n")
         val result = handler.onBackendMessage(input)

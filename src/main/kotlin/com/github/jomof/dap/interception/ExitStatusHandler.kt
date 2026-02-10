@@ -37,8 +37,9 @@ class ExitStatusHandler : InterceptionHandler {
          * Matches lldb-dap's exit status output:
          * `Process <pid> exited with status = <code> (0x...)`
          *
-         * Group 1 captures the decimal exit code.
+         * Group 1 captures the decimal exit code. On Windows, exit codes
+         * are 32-bit signed and may be negative (e.g., `-1`).
          */
-        val EXIT_PATTERN = Regex("""^Process \d+ exited with status = (\d+)""")
+        val EXIT_PATTERN = Regex("""^Process \d+ exited with status = (-?\d+)""")
     }
 }

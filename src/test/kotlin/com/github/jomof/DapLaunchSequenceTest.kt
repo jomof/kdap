@@ -1,6 +1,7 @@
 package com.github.jomof
 
 import com.github.jomof.dap.messages.*
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import java.io.InputStream
@@ -27,6 +28,8 @@ import java.util.concurrent.TimeUnit
  */
 @Timeout(value = 120, unit = TimeUnit.SECONDS)
 class DapLaunchSequenceTest {
+
+    private val isWindows = System.getProperty("os.name").lowercase().contains("win")
 
     // ── Shared expected launch sequence ──────────────────────────────────
 
@@ -99,13 +102,16 @@ class DapLaunchSequenceTest {
         ExpectedEvent(
             "process exit", both,
             event = OutputEvent(seq = 0, category = "console", output = "Process exited with code <N>."),
-            regex = mapOf("output" to Regex("""^Process exited with code \d+\.\n$""")),
+            regex = mapOf("output" to Regex("""^Process exited with code -?\d+\.\n$""")),
         ),
 
         // ── Shutdown ─────────────────────────────────────────────────
+        // Exit code is 255 on macOS/Linux (8-bit truncation of -1)
+        // and -1 on Windows (32-bit signed).
         ExpectedEvent(
             "exited event", both,
             event = ExitedEvent(seq = 0, exitCode = 255),
+            regex = mapOf("exitCode" to Regex("""-1|255""")),
         ),
         ExpectedEvent(
             "terminated event", both,
@@ -180,7 +186,7 @@ class DapLaunchSequenceTest {
         ExpectedEvent(
             "process exit", both,
             event = OutputEvent(seq = 0, category = "console", output = "Process exited with code <N>."),
-            regex = mapOf("output" to Regex("""^Process exited with code \d+\.\n$""")),
+            regex = mapOf("output" to Regex("""^Process exited with code -?\d+\.\n$""")),
         ),
 
         // ── Shutdown ─────────────────────────────────────────────────
@@ -252,8 +258,9 @@ class DapLaunchSequenceTest {
             ),
             // args is a JSON array — regex matches its stringified form.
             // kind and title are exact-matched by structural comparison.
+            // Path separator and .exe extension vary by platform.
             regex = mapOf(
-                "args" to Regex("""\[".+/codelldb-launch","--connect=127\.0\.0\.1:\d+","--clear-screen"]"""),
+                "args" to Regex("""\[".+[/\\]codelldb-launch[^"]*","--connect=127\.0\.0\.1:\d+","--clear-screen"]"""),
             ),
         ),
 
@@ -288,13 +295,16 @@ class DapLaunchSequenceTest {
         ExpectedEvent(
             "process exit", both,
             event = OutputEvent(seq = 0, category = "console", output = "Process exited with code <N>."),
-            regex = mapOf("output" to Regex("""^Process exited with code \d+\.\n$""")),
+            regex = mapOf("output" to Regex("""^Process exited with code -?\d+\.\n$""")),
         ),
 
         // ── Shutdown ─────────────────────────────────────────────────
+        // Exit code is 255 on macOS/Linux (8-bit truncation of -1)
+        // and -1 on Windows (32-bit signed).
         ExpectedEvent(
             "exited event", both,
             event = ExitedEvent(seq = 0, exitCode = 255),
+            regex = mapOf("exitCode" to Regex("""-1|255""")),
         ),
         ExpectedEvent(
             "terminated event", both,
@@ -313,6 +323,9 @@ class DapLaunchSequenceTest {
 
     @Test
     fun `codelldb produces expected launch events`() {
+        // CodeLLDB on Windows doesn't isolate debuggee stdout from the DAP
+        // transport, causing missing output events and framing corruption.
+        assumeTrue(!isWindows, "CodeLLDB stdio transport is unreliable on Windows")
         runLaunchAndAssert(ConnectionMode.STDIO_CODELDB, Server.CODELLDB, "codelldb")
     }
 
@@ -328,6 +341,7 @@ class DapLaunchSequenceTest {
 
     @Test
     fun `codelldb produces expected events with custom name`() {
+        assumeTrue(!isWindows, "CodeLLDB stdio transport is unreliable on Windows")
         runLaunchAndAssert(
             ConnectionMode.STDIO_CODELDB, Server.CODELLDB, "codelldb-custom-name",
             launchArgs = mapOf("name" to "my-debug-session", "terminal" to "console"),
@@ -347,6 +361,7 @@ class DapLaunchSequenceTest {
 
     @Test
     fun `codelldb produces expected events for stdio testcase`() {
+        assumeTrue(!isWindows, "CodeLLDB stdio transport is unreliable on Windows")
         runLaunchAndAssert(
             ConnectionMode.STDIO_CODELDB, Server.CODELLDB, "codelldb-stdio",
             launchArgs = mapOf("name" to "test", "terminal" to "console", "args" to listOf("stdio")),
@@ -368,6 +383,7 @@ class DapLaunchSequenceTest {
 
     @Test
     fun `codelldb produces expected events for terminal integrated`() {
+        assumeTrue(!isWindows, "CodeLLDB stdio transport is unreliable on Windows")
         runLaunchAndAssert(
             ConnectionMode.STDIO_CODELDB, Server.CODELLDB, "codelldb-integrated",
             launchArgs = mapOf("name" to "test", "terminal" to "integrated"),
@@ -390,6 +406,7 @@ class DapLaunchSequenceTest {
 
     @Test
     fun `codelldb produces expected events for terminal external`() {
+        assumeTrue(!isWindows, "CodeLLDB stdio transport is unreliable on Windows")
         runLaunchAndAssert(
             ConnectionMode.STDIO_CODELDB, Server.CODELLDB, "codelldb-external",
             launchArgs = mapOf("name" to "test", "terminal" to "external"),

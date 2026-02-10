@@ -29,6 +29,7 @@ import com.github.jomof.dap.messages.DapRequest
  * - [LaunchEventsHandler] — injects launch status output events
  * - [ProcessEventHandler] — replaces `process` event with `continued`
  * - [CapabilitiesEventHandler] — suppresses lldb-dap's `capabilities` event
+ * - [OutputCategoryHandler] — normalizes Windows console debuggee output to stdout
  * - [ExitStatusHandler] — reformats process exit output to match CodeLLDB
  * - [OutputCoalescingHandler] — combines consecutive stdout/stderr output events
  * - [LaunchResponseOrderHandler] — reorders launch/configDone responses to match CodeLLDB
@@ -64,6 +65,7 @@ class KdapInterceptor(
             LaunchEventsHandler(),
             ProcessEventHandler(),              // must follow LaunchEventsHandler
             CapabilitiesEventHandler(),        // suppresses lldb-dap's capabilities event
+            OutputCategoryHandler(),           // normalizes Windows console→stdout before exit/coalescing
             ExitStatusHandler(),               // reformats exit output before coalescing
             OutputCoalescingHandler(),         // combines consecutive stdout/stderr events
             LaunchResponseOrderHandler(),       // must be last (sees ContinuedEvent from ProcessEventHandler)

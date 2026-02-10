@@ -1,6 +1,7 @@
 package com.github.jomof.dap
 
 import com.github.jomof.dap.DapSession.RequestAction
+import com.github.jomof.dap.debugsession.DebugSession
 import com.github.jomof.dap.interception.*
 import com.github.jomof.dap.messages.DapMessage
 import com.github.jomof.dap.messages.DapRequest
@@ -23,17 +24,14 @@ import com.github.jomof.dap.messages.DapRequest
  *
  * ## Default handlers
  *
- * - [RunInTerminalHandler] — orchestrates `runInTerminal` for terminal launch modes
+ * - [InitializeHandler] — captures client capabilities from initialize
+ * - [LaunchHandler] — handles launch request via [DebugSession]
+ * - [AttachHandler] — handles attach request via [DebugSession]
+ * - [DisconnectHandler] — handles disconnect request via [DebugSession]
+ * - [TerminateHandler] — handles terminate request via [DebugSession]
  * - [EvaluateContextRewriter] — rewrites CodeLLDB `_command` to `repl`
- * - [TriggerErrorHandler] — test hook for error-response path
- * - [ConsoleModeHandler] — injects console mode announcement
- * - [LaunchEventsHandler] — injects launch status output events
- * - [ProcessEventHandler] — replaces `process` event with `continued`
- * - [CapabilitiesEventHandler] — suppresses lldb-dap's `capabilities` event
- * - [OutputCategoryHandler] — normalizes Windows console debuggee output to stdout
  * - [ExitStatusHandler] — reformats process exit output to match CodeLLDB
  * - [OutputCoalescingHandler] — combines consecutive stdout/stderr output events
- * - [LaunchResponseOrderHandler] — reorders launch/configDone responses to match CodeLLDB
  */
 class KdapInterceptor(
     private val handlers: List<InterceptionHandler> = defaultHandlers(),
@@ -59,18 +57,18 @@ class KdapInterceptor(
     }
 
     companion object {
-        fun defaultHandlers(): List<InterceptionHandler> = listOf(
-            RunInTerminalHandler(),              // must be early (returns HandleAsync before others see launch)
-            EvaluateContextRewriter(),
-            TriggerErrorHandler(),
-            ConsoleModeHandler(),
-            LaunchEventsHandler(),
-            ProcessEventHandler(),              // must follow LaunchEventsHandler
-            CapabilitiesEventHandler(),        // suppresses lldb-dap's capabilities event
-            OutputCategoryHandler(),           // normalizes Windows console→stdout before exit/coalescing
-            ExitStatusHandler(),               // reformats exit output before coalescing
-            OutputCoalescingHandler(),         // combines consecutive stdout/stderr events
-            LaunchResponseOrderHandler(),       // must be last (sees ContinuedEvent from ProcessEventHandler)
-        )
+        fun defaultHandlers(): List<InterceptionHandler> {
+            val session = DebugSession()
+            return listOf(
+                InitializeHandler(session),        // captures client capabilities
+                LaunchHandler(session),            // handles launch request
+                AttachHandler(session),            // handles attach request
+                DisconnectHandler(session),        // handles disconnect request
+                TerminateHandler(session),         // handles terminate request
+                EvaluateContextRewriter(),         // rewrites CodeLLDB _command → repl
+                ExitStatusHandler(),               // reformats exit output to match CodeLLDB
+                OutputCoalescingHandler(),         // combines consecutive stdout/stderr events
+            )
+        }
     }
 }

@@ -1,4 +1,4 @@
-# Download LLDB + CodeLLDB prebuilts and compile Kotlin in parallel, then run tests.
+# Build LLDB from source + download CodeLLDB, compile Kotlin, then run tests.
 
 name: CI
 
@@ -40,11 +40,11 @@ jobs:
           java-version: 25
           cache: gradle
 
-      - name: Cache LLDB prebuilts
+      - name: Cache LLDB build
         uses: actions/cache@v4
         with:
-          path: prebuilts/lldb/${{ matrix.platform_id }}
-          key: lldb-${{ matrix.platform_id }}-${{ env.LLVM_VERSION }}
+          path: lldb-install/${{ matrix.platform_id }}
+          key: lldb-build-${{ matrix.platform_id }}-${{ env.LLVM_VERSION }}-${{ hashFiles('scripts/build-lldb.sh') }}
 
       - name: Cache CodeLLDB VSIX
         uses: actions/cache@v4
@@ -52,24 +52,45 @@ jobs:
           path: codelldb-vsix
           key: codelldb-vsix-${{ matrix.os }}-${{ runner.arch }}
 
-      - name: Download prebuilts, compile, and build debuggee in parallel
+      # Install build dependencies needed to compile LLDB from source.
+      - name: Install LLDB build deps (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build python3-dev swig libxml2-dev
+
+      - name: Install LLDB build deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # cmake and python3 ship with Xcode; ninja and swig may not be present.
+          brew install ninja swig || true
+
+      - name: Install LLDB build deps (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Build LLDB from source (skips if cached install is present).
+      # This is run sequentially because the build is long on cache miss.
+      - name: Build LLDB from source
         env:
           PLATFORM_ID: ${{ matrix.platform_id }}
           LLVM_VERSION: ${{ env.LLVM_VERSION }}
+        run: ./scripts/build-lldb.sh
+
+      # Compile Kotlin, download CodeLLDB, and build debuggee in parallel.
+      - name: Compile, download CodeLLDB, and build debuggee in parallel
+        env:
+          PLATFORM_ID: ${{ matrix.platform_id }}
         run: |
-          # Start all four tasks in background.
           ./gradlew compileTestKotlin &
           GRADLE_PID=$!
-          ./scripts/download-lldb.sh &
-          LLDB_PID=$!
           ./scripts/download-codelldb-vsix.sh &
           VSIX_PID=$!
           (cmake -B debuggee/build debuggee -DCMAKE_BUILD_TYPE=Debug && cmake --build debuggee/build) &
           DEBUGGEE_PID=$!
-          # Wait for each individually so any failure is caught.
-          # (bare 'wait' returns exit code of last-terminated job, hiding earlier failures)
           wait $GRADLE_PID
-          wait $LLDB_PID
           wait $VSIX_PID
           wait $DEBUGGEE_PID
 
@@ -79,7 +100,7 @@ jobs:
       # can't detect process exit.  cmake's ad-hoc signature doesn't include
       # entitlements, so we re-sign with an explicit entitlements plist.
       # We also re-sign lldb-dap itself (its signature may be invalid after
-      # download/extraction from the LLVM release tarball).
+      # building from source).
       - name: Code-sign binaries for debugging (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -107,18 +128,12 @@ jobs:
             fi
           done
 
-          # Re-sign lldb-dap (fix potentially invalid signature from tarball extraction).
-          lldb_dap="prebuilts/lldb/${{ matrix.platform_id }}/bin/lldb-dap"
+          # Re-sign lldb-dap (fix potentially invalid signature from build).
+          lldb_dap="lldb-install/${{ matrix.platform_id }}/bin/lldb-dap"
           if [ -f "$lldb_dap" ]; then
             codesign --force --sign - "$lldb_dap"
             echo "Signed $lldb_dap (ad-hoc)"
           fi
-
-      - name: Install lldb-dap runtime deps (Linux)
-        if: matrix.os == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y libxml2 libncurses6 libpython3.10
 
       # Attach tests spawn the debuggee from the test JVM, then the adapter
       # (lldb-dap/CodeLLDB — a sibling process) attaches by PID. Yama's
@@ -127,17 +142,6 @@ jobs:
       - name: Allow ptrace attach (Linux)
         if: matrix.os == 'ubuntu-22.04'
         run: sudo sysctl -w kernel.yama.ptrace_scope=0
-
-      # lldb-dap.exe links against Python (scripting support). LLVM 21
-      # was built with Python 3.10 — must match exactly (python310.dll).
-      # This mirrors the Linux step which installs libpython3.10.
-      # If LLVM_VERSION changes, the verify step will catch a mismatch
-      # (STATUS_DLL_NOT_FOUND = exit code -1073741515 / 0xC0000135).
-      - name: Install lldb-dap runtime deps (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
 
       - name: Run tests
         run: ./gradlew test --stacktrace

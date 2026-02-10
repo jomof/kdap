@@ -4,7 +4,6 @@ import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.EnumSource
-import org.junit.jupiter.params.provider.MethodSource
 import java.util.concurrent.TimeUnit
 
 /**
@@ -25,7 +24,7 @@ class DapInitializeTest {
      */
     private val expectedOurCapabilitiesBaseline get() = expectedLldbDapInitializeCapabilitiesBaseline
 
-    /** Current capabilities from lldb-dap (LLVM 21.1.8 prebuilts). */
+    /** Current capabilities from lldb-dap (LLVM 21.1.8). */
     private val expectedLldbDapInitializeCapabilitiesBaseline = """
         {
           "supportTerminateDebuggee": true,
@@ -126,18 +125,4 @@ class DapInitializeTest {
         }
     }
 
-    /** Exercises our server's catch block: _triggerError throws, server returns internal error. */
-    @ParameterizedTest(name = "{0}")
-    @MethodSource("com.github.jomof.ConnectionMode#ourServerModes")
-    fun `triggerError request receives expected error response`(mode: ConnectionMode) {
-        mode.connect().use { ctx ->
-            try {
-                DapTestUtils.sendTriggerErrorRequest(ctx.outputStream)
-                val responseBody = DapTestUtils.readResponseBody(ctx.inputStream)
-                DapTestUtils.assertInternalErrorResponse(responseBody)
-            } catch (e: Exception) {
-                throw AssertionError("[$mode] Failed during triggerError test\n${ctx.diagnostics()}", e)
-            }
-        }
-    }
 }

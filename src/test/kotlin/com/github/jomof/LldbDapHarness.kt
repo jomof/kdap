@@ -15,17 +15,17 @@ import java.net.ServerSocket
  * - **TCP convenience**: [startTcp] picks a free port and starts lldb-dap in
  *   TCP mode, returning both the process wrapper and the port.
  *
- * Run `scripts/download-lldb.sh` to populate `prebuilts/lldb` for the current
+ * Run `scripts/build-lldb.sh` to build LLDB from source for the current
  * platform if lldb-dap is not available.
  */
 object LldbDapHarness {
 
     /** Default search directory relative to the project root. */
-    private val DEFAULT_SEARCH_DIR = File("prebuilts/lldb")
+    private val DEFAULT_SEARCH_DIR = File("lldb-install")
 
     /**
      * Resolves the lldb-dap executable, checking `KDAP_LLDB_ROOT` first
-     * (for CI), then the default `prebuilts/lldb` layout.
+     * (for CI), then the default `lldb-install` layout.
      */
     fun resolveLldbDapPath(): File? {
         val searchDir = System.getenv("KDAP_LLDB_ROOT")?.let { File(it) }
@@ -43,7 +43,7 @@ object LldbDapHarness {
     fun start(): LldbDapProcess {
         val path = resolveLldbDapPath()
             ?: throw IllegalStateException(
-                "lldb-dap not found (run scripts/download-lldb.sh or set KDAP_LLDB_ROOT)"
+                "lldb-dap not found (run scripts/build-lldb.sh or set KDAP_LLDB_ROOT)"
             )
         return LldbDapProcess.start(path)
     }
@@ -57,7 +57,7 @@ object LldbDapHarness {
         val port = ServerSocket(0).use { it.localPort }
         val path = resolveLldbDapPath()
             ?: throw IllegalStateException(
-                "lldb-dap not found (run scripts/download-lldb.sh or set KDAP_LLDB_ROOT)"
+                "lldb-dap not found (run scripts/build-lldb.sh or set KDAP_LLDB_ROOT)"
             )
         val lldbDap = LldbDapProcess.startTcp(path, port)
         return lldbDap to port

@@ -64,10 +64,6 @@ class DapAttachSequenceTest {
         ),
 
         // ── Attach phase ─────────────────────────────────────────────
-        // KDAP: attach response arrives immediately (lldb-dap responds
-        // before the backend has sent initialized).
-        ExpectedResponse("attach response", kdapOnly, command = "attach"),
-
         ExpectedEvent(
             "console mode announcement", both,
             event = OutputEvent(
@@ -93,30 +89,24 @@ class DapAttachSequenceTest {
             event = StoppedEvent(seq = 0),
         ),
 
-        // CodeLLDB: reports the attached process after the stopped event.
+        // Both servers report the attached process after the stopped event.
         ExpectedEvent(
-            "attached to process", codelldbOnly,
+            "attached to process", both,
             event = OutputEvent(seq = 0, category = "console", output = "Attached to process <pid>"),
             regex = mapOf("output" to Regex("""^Attached to process \d+\n$""")),
         ),
 
-        // CodeLLDB: attach response arrives after stopped event, once
-        // the attach has been fully processed.
-        ExpectedResponse("attach response", codelldbOnly, command = "attach"),
+        // Both servers send the attach response after the attach is
+        // fully processed (after stopped event).
+        ExpectedResponse("attach response", both, command = "attach"),
 
         ExpectedResponse("configurationDone response", both, command = "configurationDone"),
 
         // ── Disconnect / detach ──────────────────────────────────────
-        // KDAP: ProcessEventHandler converts lldb-dap's ProcessEvent
-        // (emitted during attach) into a ContinuedEvent. This arrives
-        // during the disconnect phase because lldb-dap defers it.
-        ExpectedEvent(
-            "continued event (detach)", kdapOnly,
-            event = ContinuedEvent(seq = 0, allThreadsContinued = true),
-        ),
+        // Both servers send disconnect response and terminated event.
+        ExpectedResponse("disconnect response", both, command = "disconnect"),
 
-        // CodeLLDB: sends a disconnect response and detach notification.
-        ExpectedResponse("disconnect response", codelldbOnly, command = "disconnect"),
+        // CodeLLDB: sends a detach notification.
         ExpectedEvent(
             "detached notification", codelldbOnly,
             event = OutputEvent(seq = 0, category = "console", output = "Detached from debuggee.\n"),

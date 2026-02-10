@@ -14,17 +14,18 @@ A feature-rich Debug Adapter Protocol (DAP) implementation in Kotlin, built as a
 | **lldb-server** | Remote debug server on target | For remote-forward: runs on device/remote host. |
 | **liblldb** (e.g. `liblldb.so` / `LLDB.dylib` / `liblldb.dll`) | Used by lldb-dap at runtime | Included in the official LLVM release. |
 
-We **download the official LLVM release** for the current platform and extract only `bin/lldb-dap`, `bin/lldb-server`, and `lib/` into **`prebuilts/lldb/<platform-id>/`** per §1.3 so that KDAP can run lldb-dap and tests can use lldb-server.
+We **build LLDB from source** with Python support for the current platform. The build output (lldb-dap, lldb-server, liblldb, Python bindings) is installed into **`lldb-install/<platform-id>/`** per §1.3 so that KDAP can run lldb-dap and tests can use lldb-server.
 
-### 1.2 Downloading LLDB prebuilts (implemented)
+### 1.2 Building LLDB from source (implemented)
 
-We **download** the official [LLVM release](https://github.com/llvm/llvm-project/releases) for the current platform and extract only the files we need.
+We **build** LLDB from the official [LLVM source](https://github.com/llvm/llvm-project/releases) with Python scripting support enabled.
 
-- **Script**: Run **`./scripts/download-lldb.sh`** from the project root (bash; works on Linux, macOS, and Windows via Git Bash). No arguments; use env vars to override.
+- **Script**: Run **`./scripts/build-lldb.sh`** from the project root (bash; works on Linux, macOS, and Windows via Git Bash). No arguments; use env vars to override.
 - **Env vars**: `LLVM_VERSION` (default: `21.1.8`), `PLATFORM_ID` (default: auto-detected from OS/arch).
-- **Download location (gitignored)**: Archives are downloaded to **`.lldb-download/`**. The script skips download if the archive is already present.
-- **Extraction**: Only **`bin/lldb-dap`**, **`bin/lldb-server`**, and **`lib/`** are extracted (no full unpack of the tarball). Output goes to **`prebuilts/lldb/<platform-id>/`** (source-controlled).
-- **Platforms**: `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`, `win32-x64`. The script maps OS/arch to the matching LLVM release archive URL.
+- **Source download (gitignored)**: The LLVM source tarball is downloaded and extracted to **`.llvm-source/`**. The build directory is **`lldb-build/`**. Both are cleaned up after install.
+- **Build**: CMake configures with `-DLLDB_ENABLE_PYTHON=ON` and builds only the lldb-dap, lldb-server, and liblldb targets. Output is installed to **`lldb-install/<platform-id>/`** (gitignored).
+- **Platforms**: `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`, `win32-x64`. The script auto-detects the current platform.
+- **Prerequisites**: cmake, ninja (or make), python3, C++ compiler.
 
 ### 1.3 Layout and discovery (multi-platform)
 
@@ -37,14 +38,14 @@ We **download** the official [LLVM release](https://github.com/llvm/llvm-project
     - `<platform-id>/lib/liblldb.*` (`.so` / `.dylib` / `.dll` as appropriate) if lldb-dap expects it next to the binary.
   - Example: `$KDAP_LLDB_ROOT/darwin-arm64/bin/lldb-dap`, `$KDAP_LLDB_ROOT/linux-x64/bin/lldb-server`, etc.
 - **At runtime**: KDAP resolves the **current** platform id (e.g. from `os.name`/`os.arch` or a single env var `KDAP_PLATFORM`) and looks under `$KDAP_LLDB_ROOT/<platform-id>/`. No hardcoded absolute paths; use the host’s path separator and executable naming (e.g. `.exe` on Windows only).
-- **Discovery**: Env var `KDAP_LLDB_ROOT` (points at the root that contains platform-id subdirs) or a config file path; fallback to a well-known location relative to the KDAP distribution. The **canonical location** is **`prebuilts/lldb/`** (source-controlled); the download script extracts the needed binaries there.
+- **Discovery**: Env var `KDAP_LLDB_ROOT` (points at the root that contains platform-id subdirs) or a config file path; fallback to a well-known location relative to the KDAP distribution. The **canonical location** is **`lldb-install/`** (gitignored, built from source); the build script produces the needed binaries there.
 
 ### 1.4 CI (GitHub Actions) (implemented)
 
-- **Workflow**: `.github/workflows/ci.yml` runs on push/PR to `main` and on workflow_dispatch. Two jobs:
-  - **assemble**: Runs on `ubuntu-latest`; runs `./gradlew assemble` to verify the Kotlin project builds.
-  - **build**: Matrix job that (1) runs **`scripts/download-lldb.sh`** with `PLATFORM_ID` and `LLVM_VERSION`, (2) verifies the prebuilts layout, (3) runs `./gradlew test`.
-- **Matrix**: `ubuntu-latest` (linux-x64), `macos-latest` (darwin-arm64), `windows-latest` (win32-x64). Each build job sets `PLATFORM_ID`; the script downloads (if not cached in the runner’s `.lldb-download/`) and extracts into `prebuilts/lldb/<platform_id>/`. A “Verify prebuilts layout” step checks that `lldb-dap` and `lldb-server` are present.
+- **Workflow**: `.github/workflows/ci.yml` runs on push/PR to `main` and on workflow_dispatch.
+  - **build**: Matrix job that (1) installs build dependencies, (2) runs **`scripts/build-lldb.sh`** with `PLATFORM_ID` and `LLVM_VERSION` (cached), (3) compiles Kotlin and debuggees, (4) runs `./gradlew test`.
+- **Matrix**: `ubuntu-22.04` (linux-x64), `macos-latest` (darwin-arm64), `windows-latest` (win32-x64). Each build job sets `PLATFORM_ID`; the script builds LLDB from source (or skips if the cached install is present) into `lldb-install/<platform_id>/`.
+- **Caching**: The installed LLDB output is cached with a key that includes platform, LLVM version, and build script hash. On cache hit the build is skipped entirely.
 - **Versioning**: The workflow sets `LLVM_VERSION=21.1.8`. Update in the workflow and in the script when upgrading.
 - **Dependency updates**: `.github/dependabot.yml` configures weekly updates for the Gradle and GitHub Actions ecosystems.
 
@@ -52,12 +53,12 @@ We **download** the official [LLVM release](https://github.com/llvm/llvm-project
 
 | Concern | Approach |
 |---------|----------|
-| Source of binaries | Official LLVM release tarballs; download per platform |
-| Primary artifact | lldb-dap, lldb-server, lib/ extracted into **`prebuilts/lldb/<platform-id>/`** (source-controlled) per §1.3 |
-| Download script | `scripts/download-lldb.sh`; env: `LLVM_VERSION`, `PLATFORM_ID`; downloads to `.lldb-download/` (gitignored); extracts only bin + lib to prebuilts |
-| Runtime deps | lldb-dap’s own deps (e.g. liblldb); we only spawn the process |
-| Remote | lldb-server from the same release |
-| CI | `.github/workflows/ci.yml`: assemble job (Gradle); build job runs download script per matrix, verifies prebuilts, runs Gradle test |
+| Source of binaries | Built from LLVM source with Python support |
+| Primary artifact | lldb-dap, lldb-server, liblldb, Python bindings installed into **`lldb-install/<platform-id>/`** (gitignored) per §1.3 |
+| Build script | `scripts/build-lldb.sh`; env: `LLVM_VERSION`, `PLATFORM_ID`; downloads source to `.llvm-source/` (gitignored); builds and installs to `lldb-install/` |
+| Runtime deps | lldb-dap’s own deps (e.g. liblldb, Python); all built from source |
+| Remote | lldb-server from the same build |
+| CI | `.github/workflows/ci.yml`: build job installs deps, builds LLDB (cached), compiles Kotlin, runs tests |
 | Versioning | `LLVM_VERSION=21.1.8` in workflow and script; update in both when upgrading |
 
 ---
@@ -297,7 +298,7 @@ This is an initial design for iteration.
 
 **Implementation status**
 
-- **§1 Dependencies and CI**: Implemented. LLDB prebuilts are downloaded via `scripts/download-lldb.sh` (official LLVM release per platform); output goes to `prebuilts/lldb/<platform-id>/`. CI (`.github/workflows/ci.yml`) runs Gradle assemble, a matrix download + test job, and Gradle test. Dependabot is configured for Gradle and GitHub Actions.
+- **§1 Dependencies and CI**: Implemented. LLDB is built from source via `scripts/build-lldb.sh` (with Python support); output goes to `lldb-install/<platform-id>/`. CI (`.github/workflows/ci.yml`) runs Gradle assemble, a matrix build + test job, and Gradle test. Dependabot is configured for Gradle and GitHub Actions.
 - **§2–§5**: Design only; decorator pipeline and MVP features are not yet implemented.
 
 **Next priorities**

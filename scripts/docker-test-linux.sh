@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Run tests inside a Linux Docker container matching GitHub CI (Ubuntu + JDK 21).
-# Uses --platform linux/amd64 so the container is x86_64 and finds prebuilts/lldb/linux-x64.
-# On an ARM Mac, without --platform Docker would use arm64 and the harness would look
-# for linux-arm64 (not present), so STDIO_LLDB would fail.
+# Uses --platform linux/amd64 so the container is x86_64 and the build produces
+# lldb-install/linux-x64/. On an ARM Mac, without --platform Docker would use arm64
+# and the harness would look for linux-arm64 (not built), so STDIO_LLDB would fail.
 #
-# Uses Ubuntu 22.04 so we get Python 3.10 and system libs (libxml2, libncurses6) that
-# the LLVM 21 lldb-dap binary needs at runtime. Then installs Temurin JDK 21.
+# Uses Ubuntu 22.04 so we get system libs that the LLVM build and lldb-dap need.
+# Installs build dependencies (cmake, ninja, python3-dev), builds LLDB from source
+# with Python support, then runs tests.
 #
 # Usage: from project root, ./scripts/docker-test-linux.sh
-# Requires: Docker, and prebuilts for linux-x64 (run ./scripts/download-lldb.sh --platform linux-x64 first if needed).
+# Requires: Docker.
 
 set -e
 
@@ -29,9 +30,9 @@ docker run --rm \
     apt-get update -qq && apt-get install -qq -y \
       curl xz-utils \
       openjdk-21-jdk-headless \
-      libxml2 libncurses6 libpython3.10 \
+      cmake ninja-build python3-dev swig \
+      libxml2-dev \
       > /dev/null
-    ./scripts/download-lldb.sh
-    test -d prebuilts/lldb/linux-x64/local/lib/python3.10/dist-packages/lldb || ./scripts/download-lldb.sh --force
+    ./scripts/build-lldb.sh
     ./gradlew test
   '

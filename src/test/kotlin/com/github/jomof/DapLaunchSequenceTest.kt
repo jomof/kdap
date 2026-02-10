@@ -226,25 +226,6 @@ class DapLaunchSequenceTest {
             skip = setOf("body"),
         ),
 
-        // ── runInTerminal (KDAP) ─────────────────────────────────────
-        // KDAP sends runInTerminal immediately when the launch request
-        // is received, before the backend's initialized event arrives.
-        // The async handler runs concurrently with the backend reader.
-        //
-        // KDAP args: [java, -cp, classpath, KdapLaunchKt, --connect=HOST:PORT]
-        ExpectedRequest(
-            "runInTerminal ($kind)", kdapOnly,
-            request = RunInTerminalRequest(
-                seq = 0,
-                kind = kind,
-                title = "KDAP Debug",
-                args = listOf("<java>", "-cp", "<classpath>", "KdapLaunchKt", "--connect=127.0.0.1:<port>"),
-            ),
-            regex = mapOf(
-                "args" to Regex("""\["[^"]+","-cp","[^"]+","com\.github\.jomof\.KdapLaunchKt","--connect=127\.0\.0\.1:\d+"]"""),
-            ),
-        ),
-
         // ── Launch phase ─────────────────────────────────────────────
         ExpectedEvent(
             "console mode announcement", both,
@@ -258,10 +239,25 @@ class DapLaunchSequenceTest {
             event = InitializedEvent(seq = 0),
         ),
 
-        // ── runInTerminal (CodeLLDB) ─────────────────────────────────
-        // CodeLLDB sends runInTerminal after initialized, once the
-        // launch has been processed sequentially.
+        // ── runInTerminal ────────────────────────────────────────────
+        // Both servers send runInTerminal after initialized event,
+        // once the launch has been processed and configurationDone
+        // has been received.
         //
+        // KDAP args: [java, -cp, classpath, KdapLaunchKt, --connect=HOST:PORT]
+        // Title is the launch configuration name ("test" in test configs).
+        ExpectedRequest(
+            "runInTerminal ($kind)", kdapOnly,
+            request = RunInTerminalRequest(
+                seq = 0,
+                kind = kind,
+                title = "test",
+                args = listOf("<java>", "-cp", "<classpath>", "KdapLaunchKt", "--connect=127.0.0.1:<port>"),
+            ),
+            regex = mapOf(
+                "args" to Regex("""\["[^"]+","-cp","[^"]+","com\.github\.jomof\.KdapLaunchKt","--connect=127\.0\.0\.1:\d+"]"""),
+            ),
+        ),
         // CodeLLDB args: [codelldb-launch, --connect=HOST:PORT, --clear-screen]
         ExpectedRequest(
             "runInTerminal ($kind)", codelldbOnly,

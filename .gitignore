@@ -47,11 +47,10 @@ bin/
 ### CodeLLDB VSIX (downloaded by scripts/download-codelldb-vsix.sh) ###
 codelldb-vsix/
 
-### LLDB (download script populates prebuilts/lldb only) ###
 .lldb-download/
+.llvm-source/
 lldb-build/
 lldb-install/
 prebuilts/
-
 ### Debuggee build artifacts (built by cmake) ###
 debuggee/

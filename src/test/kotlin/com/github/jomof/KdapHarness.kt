@@ -116,7 +116,7 @@ object KdapHarness {
 
     private fun resolveLldbDapPath(): String {
         val path = LldbDapHarness.resolveLldbDapPath()
-            ?: error("lldb-dap not found (run scripts/download-lldb.sh or set KDAP_LLDB_ROOT)")
+            ?: error("lldb-dap not found (run scripts/build-lldb.sh or set KDAP_LLDB_ROOT)")
         return path.absolutePath
     }
 }

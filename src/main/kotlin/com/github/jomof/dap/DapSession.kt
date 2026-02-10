@@ -3,6 +3,7 @@ package com.github.jomof.dap
 import com.github.jomof.dap.messages.DapMessage
 import com.github.jomof.dap.messages.DapRequest
 import com.github.jomof.dap.messages.DapResponse
+import com.github.jomof.dap.messages.OutputEvent
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.selects.select
@@ -114,6 +115,47 @@ class DapSession(
          * Forwards a (potentially modified) request JSON to the backend.
          */
         suspend fun forwardToBackend(json: String)
+
+        /**
+         * Sends a DAP event (or any message) directly to the client.
+         *
+         * Use this to inject events (e.g., `initialized`, `output`) from
+         * within a [RequestAction.HandleAsync] block without going through
+         * the backend.
+         */
+        suspend fun sendEventToClient(json: String)
+
+        /**
+         * Sends a DAP request to the backend and suspends until its response
+         * arrives. Assigns a fresh sequence number to avoid collisions.
+         *
+         * The matching response is routed directly back here, bypassing the
+         * interceptor's [Interceptor.onBackendMessage] chain.
+         */
+        suspend fun sendRequestToBackendAndAwait(json: String): DapResponse
+
+        /**
+         * Like [sendRequestToBackendAndAwait], but suppresses console `output`
+         * events from the backend while waiting for the response.
+         *
+         * This is used by Python SB API calls (via `script` commands) that
+         * produce auto-displayed output. Python's `PRINT_EXPR` writes to
+         * `sys.stdout`, which LLDB routes both into the evaluate response's
+         * `result` field **and** as separate DAP `output` events. The result
+         * field is how we read return values; the output events are unwanted
+         * noise that would pollute the client's event stream.
+         */
+        suspend fun sendSilentRequestToBackendAndAwait(json: String): DapResponse
+
+        /**
+         * Intercepts the next client request whose `command` matches
+         * [command]. The request is consumed (not forwarded to the backend
+         * or passed to [Interceptor.onRequest]).
+         *
+         * Returns the raw JSON of the intercepted request. Used to wait for
+         * protocol milestones like `configurationDone`.
+         */
+        suspend fun interceptClientRequest(command: String): String
     }
 
     /**
@@ -172,9 +214,41 @@ class DapSession(
         // Seq counter for reverse requests sent to the client.
         val reverseSeq = AtomicInteger(1_000_000)
 
+        // Seq counter for requests sent to the backend by HandleAsync blocks.
+        // Starts at 2,000,000 to avoid collisions with client-originated seqs.
+        val backendSeq = AtomicInteger(2_000_000)
+
         // Pending reverse request responses: keyed by the seq we assigned
         // to the reverse request. The HandleAsync block awaits on these.
         val pendingReverseResponses = ConcurrentHashMap<Int, CompletableDeferred<DapResponse>>()
+
+        // Pending backend responses: keyed by seq we assigned to a request
+        // sent via sendRequestToBackendAndAwait. The backendReader routes
+        // matching responses here, bypassing the interceptor chain.
+        val pendingBackendResponses = ConcurrentHashMap<Int, CompletableDeferred<DapResponse>>()
+
+        // Pending client request interceptions: keyed by command name.
+        // When the clientReader sees a request matching a registered command,
+        // it delivers the raw JSON here instead of processing it normally.
+        val pendingClientInterceptions = ConcurrentHashMap<String, CompletableDeferred<String>>()
+
+        // Counter for pending "silent" evaluate requests. When > 0, console
+        // output events from the backend are suppressed (not forwarded to the
+        // client). This prevents Python SB API calls from polluting the DAP
+        // event stream with auto-display output.
+        val pendingSilentRequests = AtomicInteger(0)
+
+        // Set of seq numbers belonging to silent evaluate requests. Used by
+        // the backend reader to know when to schedule a deferred decrement.
+        val silentRequestSeqs = ConcurrentHashMap.newKeySet<Int>()
+
+        // Number of decrements to apply to pendingSilentRequests AFTER the
+        // backend reader finishes processing the current message. This ensures
+        // the counter stays elevated through the output event that may trail
+        // the evaluate response (race condition: deferred.complete() can
+        // resume the awaiting coroutine before the backend reader processes
+        // the next message).
+        val deferredDecrements = AtomicInteger(0)
 
         val asyncCtx = object : AsyncRequestContext {
             override suspend fun sendReverseRequest(json: String): Int {
@@ -197,6 +271,48 @@ class DapSession(
             override suspend fun forwardToBackend(json: String) {
                 toBackend.send(json)
             }
+
+            override suspend fun sendEventToClient(json: String) {
+                toClient.send(json)
+            }
+
+            override suspend fun sendRequestToBackendAndAwait(json: String): DapResponse {
+                val seq = backendSeq.getAndIncrement()
+                val obj = JSONObject(json)
+                obj.put("seq", seq)
+                val deferred = CompletableDeferred<DapResponse>()
+                pendingBackendResponses[seq] = deferred
+                toBackend.send(obj.toString())
+                return deferred.await()
+            }
+
+            override suspend fun sendSilentRequestToBackendAndAwait(json: String): DapResponse {
+                val seq = backendSeq.getAndIncrement()
+                val obj = JSONObject(json)
+                obj.put("seq", seq)
+                val deferred = CompletableDeferred<DapResponse>()
+                pendingBackendResponses[seq] = deferred
+                silentRequestSeqs.add(seq)
+                pendingSilentRequests.incrementAndGet()
+                toBackend.send(obj.toString())
+                try {
+                    return deferred.await()
+                } finally {
+                    // Only decrement here if the backend reader didn't handle
+                    // it (error/cancellation case where the response was never
+                    // processed). If the backend reader already removed the seq,
+                    // this is a no-op.
+                    if (silentRequestSeqs.remove(seq)) {
+                        pendingSilentRequests.decrementAndGet()
+                    }
+                }
+            }
+
+            override suspend fun interceptClientRequest(command: String): String {
+                val deferred = CompletableDeferred<String>()
+                pendingClientInterceptions[command] = deferred
+                return deferred.await()
+            }
         }
 
         val clientWriterJob = launchWriter("clientWriter", toClient, clientOutput)
@@ -204,12 +320,44 @@ class DapSession(
 
         val backendReaderJob = launchReader("backendReader", backendInput) { rawJson ->
             val message = DapMessage.parse(rawJson)
+
+            // Route responses to pending sendRequestToBackendAndAwait callers.
+            if (message is DapResponse) {
+                val deferred = pendingBackendResponses.remove(message.requestSeq)
+                if (deferred != null) {
+                    // If this response belongs to a silent evaluate, schedule
+                    // a deferred decrement. The counter stays elevated through
+                    // the NEXT message so that any trailing output event from
+                    // the same script command is still suppressed.
+                    if (silentRequestSeqs.remove(message.requestSeq)) {
+                        deferredDecrements.incrementAndGet()
+                    }
+                    deferred.complete(message)
+                    return@launchReader
+                }
+            }
+
             val results = interceptor.onBackendMessage(message)
             for (msg in results) {
+                // Suppress console output events during silent Python evaluate
+                // calls. These are auto-display artifacts from LLDB's Python
+                // interpreter that would otherwise pollute the event stream.
+                if (pendingSilentRequests.get() > 0
+                    && msg is OutputEvent
+                    && msg.category == "console"
+                ) {
+                    log.fine { "backendReader: suppressed console output during silent evaluate: ${msg.output.take(80)}" }
+                    continue
+                }
                 // Identity check: if the interceptor returned the same object,
                 // use the original raw JSON for perfect wire fidelity.
                 toClient.send(if (msg === message) rawJson else msg.toJson())
             }
+
+            // Apply deferred decrements AFTER processing this message, so the
+            // counter was still elevated while we checked output events above.
+            val n = deferredDecrements.getAndSet(0)
+            if (n > 0) pendingSilentRequests.addAndGet(-n)
         }
 
         val clientReaderJob = launchReader("clientReader", clientInput) { rawJson ->
@@ -227,15 +375,21 @@ class DapSession(
                     }
                 }
                 is DapRequest -> {
-                    when (val action = interceptor.onRequest(message)) {
-                        is RequestAction.Forward -> toBackend.send(rawJson)
-                        is RequestAction.Respond -> toClient.send(action.response.toJson())
-                        is RequestAction.ForwardModified -> toBackend.send(action.modifiedRequest.toJson())
-                        is RequestAction.HandleAsync -> {
-                            // Launch async handler as a child coroutine so the
-                            // client reader continues processing messages.
-                            launch {
-                                action.block(rawJson, asyncCtx)
+                    // Check if an async handler is waiting for this command.
+                    val interceptionDeferred = pendingClientInterceptions.remove(message.command)
+                    if (interceptionDeferred != null) {
+                        interceptionDeferred.complete(rawJson)
+                    } else {
+                        when (val action = interceptor.onRequest(message)) {
+                            is RequestAction.Forward -> toBackend.send(rawJson)
+                            is RequestAction.Respond -> toClient.send(action.response.toJson())
+                            is RequestAction.ForwardModified -> toBackend.send(action.modifiedRequest.toJson())
+                            is RequestAction.HandleAsync -> {
+                                // Launch async handler as a child coroutine so the
+                                // client reader continues processing messages.
+                                launch {
+                                    action.block(rawJson, asyncCtx)
+                                }
                             }
                         }
                     }

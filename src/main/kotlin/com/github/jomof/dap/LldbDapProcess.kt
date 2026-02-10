@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit
  *
  * Example:
  * ```
- * val exe = LldbDapProcess.findLldbDap(File("prebuilts/lldb"))
+ * val exe = LldbDapProcess.findLldbDap(File("lldb-install"))
  *     ?: error("lldb-dap not found")
  * LldbDapProcess.start(exe).use { lldb ->
  *     DapFraming.writeMessage(lldb.outputStream, initializeRequest)
@@ -133,7 +133,7 @@ class LldbDapProcess private constructor(
 
         /**
          * Discovers the `lldb-dap` binary under [searchDir] using the standard
-         * LLVM prebuilts layout:
+         * LLVM install layout:
          *
          *     <searchDir>/<platformId>/bin/lldb-dap[.exe]
          *
@@ -158,8 +158,8 @@ class LldbDapProcess private constructor(
          * (e.g. `"darwin-arm64"`, `"linux-x64"`, `"win32-x64"`), or `null` if
          * the platform is not recognized.
          *
-         * This matches the directory names used by LLVM release downloads and
-         * the `scripts/download-lldb.sh` script.
+         * This matches the directory names used by the `scripts/build-lldb.sh`
+         * script and LLVM release conventions.
          */
         fun currentPlatformId(): String? {
             val os = System.getProperty("os.name").lowercase()
@@ -217,20 +217,31 @@ class LldbDapProcess private constructor(
             val os = System.getProperty("os.name").lowercase()
             when {
                 // Linux: set LD_LIBRARY_PATH so the dynamic linker finds liblldb.so.
-                // Also set PYTHONPATH if the prebuilts include Python packages.
+                // Also set PYTHONPATH if Python packages are present.
                 // macOS: do NOT set DYLD_LIBRARY_PATH — the binary's rpath handles it.
                 "linux" in os -> {
                     check(libDir.isDirectory) {
                         "LLVM lib directory not found: $libDir — " +
-                            "the LLVM installation appears incomplete (run scripts/download-lldb.sh)"
+                            "the LLVM installation appears incomplete (run scripts/build-lldb.sh)"
                     }
                     val libPath = libDir.absolutePath
                     env["LD_LIBRARY_PATH"] = env["LD_LIBRARY_PATH"]
                         ?.let { "$libPath:$it" }
                         ?: libPath
-                    // Python site-packages are optional — some LLVM builds exclude Python.
-                    val pythonSite = File(platformDir, "local/lib/python3.10/dist-packages")
-                    if (pythonSite.isDirectory) {
+                    // Dynamically find Python site-packages or dist-packages under lib/.
+                    // CMake installs to lib/pythonX.Y/site-packages/lldb/;
+                    // older installs used local/lib/python3.10/dist-packages/lldb/.
+                    val pythonSite = findPythonSitePackages(libDir)
+                        ?: findPythonSitePackages(File(platformDir, "local/lib"))
+                    if (pythonSite != null) {
+                        env["PYTHONPATH"] = pythonSite.absolutePath
+                    }
+                }
+                // macOS: set PYTHONPATH if Python packages are present.
+                // DYLD_LIBRARY_PATH is not needed — the binary's rpath handles liblldb.
+                "mac" in os || "darwin" in os -> {
+                    val pythonSite = findPythonSitePackages(libDir)
+                    if (pythonSite != null) {
                         env["PYTHONPATH"] = pythonSite.absolutePath
                     }
                 }
@@ -240,13 +251,36 @@ class LldbDapProcess private constructor(
                     val binDir = File(platformDir, "bin")
                     check(binDir.isDirectory) {
                         "LLVM bin directory not found: $binDir — " +
-                            "the LLVM installation appears incomplete (run scripts/download-lldb.sh)"
+                            "the LLVM installation appears incomplete (run scripts/build-lldb.sh)"
                     }
                     env["PATH"] = env["PATH"]
                         ?.let { "${binDir.absolutePath};$it" }
                         ?: binDir.absolutePath
                 }
             }
+        }
+
+        /**
+         * Searches under [libDir] for a Python site-packages or dist-packages
+         * directory containing an `lldb` module. Handles the various layouts
+         * produced by CMake installs:
+         *
+         * - `lib/python3.X/site-packages/` (CMake install)
+         * - `lib/python3.X/dist-packages/` (Debian-style)
+         *
+         * @return the site-packages/dist-packages directory, or `null` if not found.
+         */
+        private fun findPythonSitePackages(libDir: File): File? {
+            if (!libDir.isDirectory) return null
+            return libDir.listFiles()
+                ?.filter { it.isDirectory && it.name.startsWith("python") }
+                ?.flatMap { pythonDir ->
+                    listOf("site-packages", "dist-packages").mapNotNull { suffix ->
+                        val candidate = File(pythonDir, suffix)
+                        if (candidate.isDirectory) candidate else null
+                    }
+                }
+                ?.firstOrNull()
         }
     }
 }

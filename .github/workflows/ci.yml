@@ -87,9 +87,19 @@ jobs:
              lldb-install/win32-x64/bin/lldb-dap.exe \
              lldb-install/win32-x64/bin/lldb-server.exe \
              lldb-install/win32-x64/bin/liblldb.dll
-          echo "--- Check Python DLL dependency ---"
-          dumpbin //dependents lldb-install/win32-x64/bin/liblldb.dll 2>/dev/null \
-            | grep -i python || echo "no python dependency found (or dumpbin unavailable)"
+
+      - name: Diagnose LLDB dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bin = "lldb-install/win32-x64/bin"
+          Write-Host "--- DLL dependencies of liblldb.dll ---"
+          & dumpbin /dependents "$bin/liblldb.dll" 2>&1 | Select-String -Pattern "\.dll" | ForEach-Object { $_.Line.Trim() }
+          Write-Host "--- DLL dependencies of lldb-dap.exe ---"
+          & dumpbin /dependents "$bin/lldb-dap.exe" 2>&1 | Select-String -Pattern "\.dll" | ForEach-Object { $_.Line.Trim() }
+          Write-Host "--- Try running lldb --version ---"
+          $env:PATH = "$((Resolve-Path $bin).Path);$env:PATH"
+          & "$bin/lldb.exe" --version 2>&1
 
       - name: Set up Python (Windows)
         if: runner.os == 'Windows'

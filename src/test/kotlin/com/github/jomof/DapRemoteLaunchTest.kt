@@ -37,7 +37,10 @@ class DapRemoteLaunchTest {
         assumeTrue(lldbServer != null, "lldb-server not found next to lldb-dap")
         val debuggee = DapTestUtils.resolveDebuggeeBinary()
 
-        // 1. Start lldb-server — race-free socket allocation (no TCP port race)
+        // 1. Start lldb-server on a TCP port
+        //    CodeLLDB requires a TCP-reachable platform to spawn its GDB server;
+        //    unix sockets (abstract or file-based) connect but fail at GDB launch
+        //    with "unable to launch a GDB server on '127.0.0.1'"
         val isMac = System.getProperty("os.name").lowercase().contains("mac")
         val platformName = if (isMac) "remote-macosx" else "remote-linux"
 
@@ -45,33 +48,12 @@ class DapRemoteLaunchTest {
         // here via the remote platform's file transfer mechanism.
         val tempDir = java.nio.file.Files.createTempDirectory("lldb-server-remote").toFile()
 
-        // Build the lldb-server command and platform connect URL per platform:
-        //   Linux: unix-abstract sockets — race-free, no filesystem, no cleanup
-        //   macOS: TCP with OS-assigned port — CodeLLDB requires a TCP-reachable
-        //          platform to spawn its GDB server; unix:// listen works but
-        //          CodeLLDB fails with "unable to launch a GDB server on '127.0.0.1'"
-        val cmd: List<String>
-        val platformConnectUrl: String
-
-        if (!isMac) {
-            // Linux: abstract unix socket — zero race, zero cleanup
-            val socketId = java.util.UUID.randomUUID().toString()
-            cmd = listOf(
-                lldbServer!!.absolutePath, "platform", "--server",
-                "--listen", "unix-abstract://$socketId"
-            )
-            platformConnectUrl = "unix-abstract-connect://$socketId"
-        } else {
-            // macOS: TCP — CodeLLDB requires a TCP-reachable platform to spawn
-            // its GDB server; unix sockets connect but fail at GDB launch with
-            // "unable to launch a GDB server on '127.0.0.1'"
-            val serverPort = java.net.ServerSocket(0).use { it.localPort }
-            cmd = listOf(
-                lldbServer!!.absolutePath, "platform", "--server",
-                "--listen", "127.0.0.1:$serverPort"
-            )
-            platformConnectUrl = "connect://127.0.0.1:$serverPort"
-        }
+        val serverPort = java.net.ServerSocket(0).use { it.localPort }
+        val cmd = listOf(
+            lldbServer!!.absolutePath, "platform", "--server",
+            "--listen", "127.0.0.1:$serverPort"
+        )
+        val platformConnectUrl = "connect://127.0.0.1:$serverPort"
 
         val pb = ProcessBuilder(cmd).redirectErrorStream(true)
         if (isMac) {
@@ -91,10 +73,23 @@ class DapRemoteLaunchTest {
             }
         }
 
-        // Give lldb-server a moment to bind
-        Thread.sleep(500)
+        // Poll until lldb-server accepts TCP connections (no hard sleep)
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline) {
+            if (!serverProcess.isAlive) {
+                throw IllegalArgumentException(
+                    "lldb-server exited (exit=${serverProcess.exitValue()})\n$serverOutput"
+                )
+            }
+            try {
+                java.net.Socket().use { s ->
+                    s.connect(java.net.InetSocketAddress("127.0.0.1", serverPort), 100)
+                }
+                break
+            } catch (_: Exception) { Thread.sleep(10) }
+        }
         require(serverProcess.isAlive) {
-            "lldb-server exited immediately (exit=${serverProcess.exitValue()})\n$serverOutput"
+            "lldb-server not ready within 5s\n$serverOutput"
         }
 
         try {

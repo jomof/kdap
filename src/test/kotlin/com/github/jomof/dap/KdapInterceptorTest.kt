@@ -45,7 +45,7 @@ class KdapInterceptorTest {
 
     @Test
     fun `launch request returns HandleAsync`() {
-        val request = LaunchRequest(seq = 2, program = "/bin/ls")
+        val request = LaunchRequest(seq = 2, arguments = LaunchRequestArguments(program = "/bin/ls"))
         assertInstanceOf(RequestAction.HandleAsync::class.java, interceptor.onRequest(request))
     }
 

@@ -4,6 +4,7 @@ import com.github.jomof.dap.DapSession.RequestAction
 import com.github.jomof.dap.debugsession.DebugSession
 import com.github.jomof.dap.messages.InitializeRequest
 import com.github.jomof.dap.messages.LaunchRequest
+import com.github.jomof.dap.messages.LaunchRequestArguments
 import com.github.jomof.dap.messages.SetBreakpointsRequest
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -31,7 +32,7 @@ class InitializeHandlerTest {
 
     @Test
     fun `launch request is forwarded unchanged`() {
-        val request = LaunchRequest(seq = 3, program = "/bin/ls")
+        val request = LaunchRequest(seq = 3, arguments = LaunchRequestArguments(program = "/bin/ls"))
         assertInstanceOf(RequestAction.Forward::class.java, handler.onRequest(request))
     }
 

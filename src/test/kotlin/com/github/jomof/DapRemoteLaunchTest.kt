@@ -1,6 +1,9 @@
 package com.github.jomof
 
-import org.json.JSONArray
+import com.github.jomof.dap.messages.CommonLaunchFields
+import com.github.jomof.dap.messages.LaunchRequest
+import com.github.jomof.dap.messages.LaunchRequestArguments
+import com.github.jomof.dap.messages.TerminalKind
 import org.json.JSONObject
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
@@ -122,23 +125,22 @@ class DapRemoteLaunchTest {
                 // 4. Launch with initCommands for remote platform
                 phase = "launch (remote via lldb-server: $platformConnectUrl)"
 
-                val launchArgs = JSONObject().apply {
-                    put("program", debuggee.absolutePath)
-                    put("name", "remote-test")
-                    put("terminal", "console")
-                    put("initCommands", JSONArray().apply {
-                        put("platform select $platformName")
-                        put("platform connect $platformConnectUrl")
-                    })
-                }
-                val launchRequest = JSONObject().apply {
-                    put("type", "request")
-                    put("seq", 2)
-                    put("command", "launch")
-                    put("arguments", launchArgs)
-                }
+                val launchRequest = LaunchRequest(
+                    seq = 2,
+                    arguments = LaunchRequestArguments(
+                        common = CommonLaunchFields(
+                            name = "remote-test",
+                            initCommands = listOf(
+                                "platform select $platformName",
+                                "platform connect $platformConnectUrl",
+                            ),
+                        ),
+                        program = debuggee.absolutePath,
+                        terminal = TerminalKind.Console,
+                    ),
+                )
                 messageLog.add("→ sent: launch request (remote: $platformConnectUrl)")
-                sendDapMessage(output, launchRequest.toString())
+                sendDapMessage(output, launchRequest.toJson())
 
                 // 5. Wait for 'initialized' event
                 phase = "waiting for 'initialized' event"

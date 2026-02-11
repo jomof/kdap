@@ -3,7 +3,6 @@ package com.github.jomof.dap.debugsession
 import com.github.jomof.dap.DapSession.AsyncRequestContext
 import com.github.jomof.dap.messages.*
 import com.github.jomof.dap.sb.*
-import com.github.jomof.dap.types.*
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.InetAddress
@@ -315,9 +314,10 @@ private suspend fun DebugSession.completeAttach(
     } else {
         val attachInfo = createAttachInfo(ctx)
         when (val pid = args.pid) {
-            is Either.First -> attachInfo.setProcessId(pid.value)
-            is Either.Second -> {
-                val pidNum = pid.value.toLongOrNull()
+            is Either.First<*> -> attachInfo.setProcessId(pid.value as Long)
+            is Either.Second<*> -> {
+                val pidStr = pid.value as String
+                val pidNum = pidStr.toLongOrNull()
                     ?: throw SBError("Process id must be a positive integer.")
                 attachInfo.setProcessId(pidNum)
             }
@@ -410,14 +410,14 @@ suspend fun DebugSession.handleTerminate(rawJson: String, ctx: AsyncRequestConte
         val debugger = createDebugger(ctx)
 
         when (val shutdown = gracefulShutdown) {
-            is Either.First -> {
+            is Either.First<*> -> {
                 // Signal name (launch.rs:347-372)
                 val process = debugger.selectedTarget().process()
                 val signals = process.unixSignals()
                 if (!signals.isValid()) {
                     throw SBError("The current platform does not support sending signals.")
                 }
-                val signo = signals.signalNumberFromName(shutdown.value)
+                val signo = signals.signalNumberFromName(shutdown.value as String)
                     ?: throw SBError("Invalid signal name: ${shutdown.value}")
                 signals.setShouldSuppress(signo, false)
                 signals.setShouldStop(signo, false)
@@ -430,9 +430,10 @@ suspend fun DebugSession.handleTerminate(rawJson: String, ctx: AsyncRequestConte
                 }
                 process.signal(signo)
             }
-            is Either.Second -> {
+            is Either.Second<*> -> {
                 // Commands (launch.rs:374-376)
-                execCommands("gracefulShutdown", shutdown.value, debugger, ctx)
+                @Suppress("UNCHECKED_CAST")
+                execCommands("gracefulShutdown", shutdown.value as List<String>, debugger, ctx)
             }
             null -> { /* No graceful shutdown configured */ }
         }
@@ -641,8 +642,11 @@ private suspend fun configureStdio(
 ) {
     // Build stdio array: either from args or empty (launch.rs:496-504)
     val stdioPaths: MutableList<String?> = when (val stdio = args.stdio) {
-        is Either.First -> mutableListOf(stdio.value)
-        is Either.Second -> stdio.value.toMutableList()
+        is Either.First<*> -> mutableListOf(stdio.value as String)
+        is Either.Second<*> -> {
+            @Suppress("UNCHECKED_CAST")
+            (stdio.value as List<String?>).toMutableList()
+        }
         null -> mutableListOf()
     }
     // Pad to at least 3 entries
@@ -796,7 +800,3 @@ private suspend fun logErrors(block: suspend () -> Unit) {
 
 private fun escapeForLldb(s: String): String =
     s.replace("\\", "\\\\").replace("\"", "\\\"")
-
-/** Returns `null` if the key is absent; otherwise the boolean value. */
-private fun JSONObject.optNullableBoolean(key: String): Boolean? =
-    if (has(key)) optBoolean(key) else null

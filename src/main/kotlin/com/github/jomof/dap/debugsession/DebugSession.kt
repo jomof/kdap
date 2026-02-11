@@ -1,6 +1,6 @@
 package com.github.jomof.dap.debugsession
 
-import com.github.jomof.dap.types.Either
+import com.github.jomof.dap.messages.Either
 
 /**
  * Mutable session state for a single debug session, mirroring the fields

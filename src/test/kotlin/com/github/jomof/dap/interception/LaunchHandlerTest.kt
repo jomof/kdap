@@ -4,6 +4,7 @@ import com.github.jomof.dap.DapSession.RequestAction
 import com.github.jomof.dap.debugsession.DebugSession
 import com.github.jomof.dap.messages.InitializeRequest
 import com.github.jomof.dap.messages.LaunchRequest
+import com.github.jomof.dap.messages.LaunchRequestArguments
 import com.github.jomof.dap.messages.SetBreakpointsRequest
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -19,7 +20,7 @@ class LaunchHandlerTest {
 
     @Test
     fun `launch request returns HandleAsync`() {
-        val request = LaunchRequest(seq = 1, program = "/bin/ls")
+        val request = LaunchRequest(seq = 1, arguments = LaunchRequestArguments(program = "/bin/ls"))
         assertInstanceOf(RequestAction.HandleAsync::class.java, handler.onRequest(request))
     }
 

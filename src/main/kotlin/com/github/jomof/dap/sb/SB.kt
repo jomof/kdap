@@ -233,6 +233,14 @@ interface SBProcess {
     suspend fun state(): ProcessState
 
     /**
+     * Returns the exit status of the process. Only valid when [state]
+     * returns [ProcessState.Exited].
+     *
+     * Maps to `SBProcess::GetExitStatus`.
+     */
+    suspend fun exitStatus(): Int
+
+    /**
      * Resumes execution of the process.
      *
      * Maps to `SBProcess::Continue`.

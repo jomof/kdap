@@ -36,9 +36,11 @@ import com.github.jomof.dap.messages.DapRequest
  */
 class KdapInterceptor(
     private val handlers: List<InterceptionHandler> = defaultHandlers(),
+    private val sbWatcher: SBWatcher? = null,
 ) : DapSession.Interceptor {
 
     override fun onRequest(request: DapRequest): RequestAction {
+        sbWatcher?.onMessage("→lldb-dap", request.toJson())
         var result: RequestAction = RequestAction.Forward
         for (handler in handlers) {
             val action = handler.onRequest(request)
@@ -50,6 +52,7 @@ class KdapInterceptor(
     }
 
     override fun onBackendMessage(message: DapMessage): List<DapMessage> {
+        sbWatcher?.onMessage("←lldb-dap", message.toJson())
         var messages = listOf(message)
         for (handler in handlers) {
             messages = messages.flatMap { handler.onBackendMessage(it) }
@@ -58,8 +61,10 @@ class KdapInterceptor(
     }
 
     companion object {
-        fun defaultHandlers(): List<InterceptionHandler> {
-            val session = DebugSession()
+        fun defaultHandlers(sbWatcher: SBWatcher? = null): List<InterceptionHandler> {
+            val session = DebugSession().apply {
+                this.sbWatcher = sbWatcher
+            }
             return listOf(
                 InitializeHandler(session),        // captures client capabilities
                 LaunchHandler(session),            // handles launch request

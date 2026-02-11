@@ -2,6 +2,7 @@ package com.github.jomof
 
 import com.github.jomof.dap.messages.DapEvent
 import com.github.jomof.dap.messages.DapMessage
+import com.github.jomof.dap.messages.DapResponse
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.File
@@ -30,7 +31,7 @@ interface DapConnection : AutoCloseable {
     /** e.g. "remote-macosx" or "remote-linux" */
     val platformName: String
 
-    /** e.g. "connect://127.0.0.1:12345" */
+    /** e.g. "connect://127.0.0.1:12345" or "unix:///tmp/lldb.sock" */
     val platformConnectUrl: String
 
     /** Human-readable diagnostic info for failure reporting. */
@@ -49,35 +50,67 @@ interface DapConnection : AutoCloseable {
         error("No '$eventType' event within $maxMessages messages")
     }
 
+    /**
+     * Reads messages until a [DapResponse] with the given [command] is found.
+     * Non-matching messages are skipped. Throws if [maxMessages] messages
+     * are read without finding it.
+     */
+    fun waitForResponse(command: String, maxMessages: Int = 50): DapResponse {
+        repeat(maxMessages) {
+            val message = receive()
+            if (message is DapResponse && message.command == command) return message
+        }
+        error("No '$command' response within $maxMessages messages")
+    }
+
     companion object {
         /**
-         * Start lldb-server in remote platform mode, start CodeLLDB, and
-         * return a ready [DapConnection].
+         * Start lldb-server + CodeLLDB adapter, return a ready [DapConnection].
          *
-         * The returned connection owns both processes; [close] tears them
-         * down. The initialize handshake is NOT performed — callers control
-         * the full protocol sequence.
-         *
-         * @param debuggee the binary to debug (used only for availability
-         *   checks here; the actual program path goes in the launch request).
+         * Chain: test → CodeLLDB → lldb-server (remote platform).
          */
         fun createRemoteCodeLldb(debuggee: File): DapConnection {
             require(CodeLldbHarness.isAvailable()) { "CodeLLDB adapter not available" }
+            val server = startLldbServer(debuggee)
+            val adapterProcess = CodeLldbHarness.startAdapter()
+            return buildRemoteConnection("codelldb", adapterProcess, server) {
+                CodeLldbHarness.stopProcess(it)
+            }
+        }
+
+        /**
+         * Start lldb-server + KDAP adapter using TCP,
+         * return a ready [DapConnection].
+         *
+         * Chain: test → KDAP → lldb-dap → lldb-server (remote platform via TCP).
+         *
+         * @param sbLogFile when non-null, KDAP writes SB API call trace here
+         */
+        fun createRemoteKdap(debuggee: File, sbLogFile: File? = null): DapConnection {
+            val server = startLldbServer(debuggee)
+            val extraArgs = if (sbLogFile != null) {
+                arrayOf("--sb-log", sbLogFile.absolutePath)
+            } else {
+                emptyArray()
+            }
+            val adapterProcess = KdapHarness.startAdapter(*extraArgs)
+            return buildRemoteConnection("kdap", adapterProcess, server) {
+                KdapHarness.stopProcess(it)
+            }
+        }
+
+        /** Start lldb-server on TCP and wait for it to accept connections. */
+        private fun startLldbServer(debuggee: File): LldbServerContext {
             val lldbServer = LldbDapHarness.resolveLldbServer()
                 ?: error("lldb-server not found next to lldb-dap")
             require(debuggee.isFile && debuggee.canExecute()) {
                 "Debuggee not found or not executable: $debuggee"
             }
 
-            // Platform detection
             val isMac = System.getProperty("os.name").lowercase().contains("mac")
-
-            // Temp working dir — CodeLLDB copies the program here via
-            // the remote platform's file transfer mechanism.
             val tempDir = java.nio.file.Files.createTempDirectory("lldb-server-remote").toFile()
-
-            // Start lldb-server on OS-assigned TCP port
             val serverPort = ServerSocket(0).use { it.localPort }
+
             val cmd = listOf(
                 lldbServer.absolutePath, "platform", "--server",
                 "--listen", "127.0.0.1:$serverPort"
@@ -89,22 +122,21 @@ interface DapConnection : AutoCloseable {
                 pb.environment()["LLDB_DEBUGSERVER_PATH"] = debugServer.absolutePath
             }
             pb.directory(tempDir)
-            val serverProcess = pb.start()
+            val process = pb.start()
 
-            // Drain lldb-server output in background
-            val serverOutput = StringBuilder()
+            val output = StringBuilder()
             kotlin.concurrent.thread(isDaemon = true) {
-                serverProcess.inputStream.bufferedReader(Charsets.UTF_8).use { r ->
-                    r.lineSequence().forEach { serverOutput.appendLine(it) }
+                process.inputStream.bufferedReader(Charsets.UTF_8).use { r ->
+                    r.lineSequence().forEach { output.appendLine(it) }
                 }
             }
 
             // Poll until lldb-server accepts TCP connections
             val deadline = System.currentTimeMillis() + 5_000
             while (System.currentTimeMillis() < deadline) {
-                if (!serverProcess.isAlive) {
+                if (!process.isAlive) {
                     throw IllegalStateException(
-                        "lldb-server exited (exit=${serverProcess.exitValue()})\n$serverOutput"
+                        "lldb-server exited (exit=${process.exitValue()})\n$output"
                     )
                 }
                 try {
@@ -114,56 +146,130 @@ interface DapConnection : AutoCloseable {
                     break
                 } catch (_: Exception) { Thread.sleep(10) }
             }
-            require(serverProcess.isAlive) {
-                "lldb-server not ready within 5s\n$serverOutput"
+            require(process.isAlive) { "lldb-server not ready within 5s\n$output" }
+
+            val platformName = if (isMac) "remote-macosx" else "remote-linux"
+            return LldbServerContext(process, output, "connect://127.0.0.1:$serverPort", platformName)
+        }
+
+        /** Start lldb-server on a unix domain socket. */
+        private fun startLldbServerUnix(debuggee: File): LldbServerContext {
+            val lldbServer = LldbDapHarness.resolveLldbServer()
+                ?: error("lldb-server not found next to lldb-dap")
+            require(debuggee.isFile && debuggee.canExecute()) {
+                "Debuggee not found or not executable: $debuggee"
             }
 
-            // Start CodeLLDB adapter via stdio
-            val codelldbProcess = CodeLldbHarness.startAdapter()
+            val isMac = System.getProperty("os.name").lowercase().contains("mac")
+
+            // Use /tmp with a short name to stay under macOS's 104-byte
+            // sun_path limit. Java's createTempDirectory produces paths
+            // like /var/folders/.../lldb-server-remote<random>/... which
+            // can easily exceed the limit, causing EILSEQ ("Illegal byte
+            // sequence") errors.
+            val shortId = java.util.UUID.randomUUID().toString().take(8)
+            val tempDir = File("/tmp/lldb-$shortId")
+            tempDir.mkdirs()
+            tempDir.deleteOnExit()
+
+            val socketPath = File(tempDir, "s.sock").absolutePath
+            val cmd = listOf(
+                lldbServer.absolutePath, "platform", "--server",
+                "--listen", socketPath
+            )
+            val pb = ProcessBuilder(cmd).redirectErrorStream(true)
+            if (isMac) {
+                val debugServer = LldbDapHarness.resolveDebugServer()
+                    ?: error("debugserver not found (install Xcode CLT)")
+                pb.environment()["LLDB_DEBUGSERVER_PATH"] = debugServer.absolutePath
+            }
+            pb.directory(tempDir)
+            val process = pb.start()
+
+            val output = StringBuilder()
+            kotlin.concurrent.thread(isDaemon = true) {
+                process.inputStream.bufferedReader(Charsets.UTF_8).use { r ->
+                    r.lineSequence().forEach { output.appendLine(it) }
+                }
+            }
+
+            // Poll until the socket file appears
+            val socketFile = File(socketPath)
+            val deadline = System.currentTimeMillis() + 5_000
+            while (System.currentTimeMillis() < deadline) {
+                if (!process.isAlive) {
+                    throw IllegalStateException(
+                        "lldb-server exited (exit=${process.exitValue()})\n$output"
+                    )
+                }
+                if (socketFile.exists()) break
+                Thread.sleep(10)
+            }
+            require(process.isAlive) { "lldb-server not ready within 5s\n$output" }
+            require(socketFile.exists()) { "Socket file not created: $socketPath\n$output" }
+
+            val platformName = if (isMac) "remote-macosx" else "remote-linux"
+            return LldbServerContext(process, output, "unix-connect://$socketPath", platformName)
+        }
+
+        /** Shared: wrap an adapter process + lldb-server into a [DapConnection]. */
+        private fun buildRemoteConnection(
+            adapterName: String,
+            adapterProcess: Process,
+            server: LldbServerContext,
+            stopAdapter: (Process) -> Unit,
+        ): DapConnection {
             val stderrBuf = StringBuilder()
             kotlin.concurrent.thread(isDaemon = true) {
-                codelldbProcess.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
+                adapterProcess.errorStream.bufferedReader(Charsets.UTF_8).use { r ->
                     r.lineSequence().forEach { stderrBuf.appendLine(it) }
                 }
             }
 
-            val platformName = if (isMac) "remote-macosx" else "remote-linux"
-            val platformConnectUrl = "connect://127.0.0.1:$serverPort"
-
             val input: InputStream = TimeoutInputStream(
-                BufferedInputStream(codelldbProcess.inputStream, 65_536)
+                BufferedInputStream(adapterProcess.inputStream, 65_536)
             )
-            val output: OutputStream = codelldbProcess.outputStream
+            val output: OutputStream = adapterProcess.outputStream
 
-            return RemoteCodeLldbDapConnection(
+            return RemoteDapConnection(
+                adapterName = adapterName,
                 input = input,
                 output = output,
-                codelldbProcess = codelldbProcess,
-                serverProcess = serverProcess,
+                adapterProcess = adapterProcess,
+                serverProcess = server.process,
                 stderrBuf = stderrBuf,
-                serverOutput = serverOutput,
-                platformName = platformName,
-                platformConnectUrl = platformConnectUrl,
+                serverOutput = server.output,
+                platformName = server.platformName,
+                platformConnectUrl = server.connectUrl,
+                stopAdapter = stopAdapter,
             )
         }
     }
 }
 
+/** Bundles lldb-server process state for the factory helpers. */
+private data class LldbServerContext(
+    val process: Process,
+    val output: StringBuilder,
+    val connectUrl: String,
+    val platformName: String,
+)
+
 /**
- * [DapConnection] backed by a CodeLLDB adapter talking to a remote
- * lldb-server platform. Created by [DapConnection.createRemoteCodeLldb].
+ * [DapConnection] backed by a DAP adapter (CodeLLDB or KDAP) talking to
+ * a remote lldb-server platform.
  */
-private class RemoteCodeLldbDapConnection(
+private class RemoteDapConnection(
+    private val adapterName: String,
     private val input: InputStream,
     private val output: OutputStream,
-    private val codelldbProcess: Process,
+    private val adapterProcess: Process,
     private val serverProcess: Process,
     private val stderrBuf: StringBuilder,
     private val serverOutput: StringBuilder,
-    /** e.g. "remote-macosx" or "remote-linux" */
     override val platformName: String,
-    /** e.g. "connect://127.0.0.1:12345" */
     override val platformConnectUrl: String,
+    private val stopAdapter: (Process) -> Unit,
 ) : DapConnection {
 
     private val nextSeq = AtomicInteger(1)
@@ -184,11 +290,11 @@ private class RemoteCodeLldbDapConnection(
     }
 
     override fun diagnostics(): String = buildString {
-        appendLine("codelldb diagnostics:")
-        if (codelldbProcess.isAlive) {
-            appendLine("  process: alive (pid ${codelldbProcess.pid()})")
+        appendLine("$adapterName diagnostics:")
+        if (adapterProcess.isAlive) {
+            appendLine("  process: alive (pid ${adapterProcess.pid()})")
         } else {
-            appendLine("  process: exited with code ${codelldbProcess.exitValue()}")
+            appendLine("  process: exited with code ${adapterProcess.exitValue()}")
         }
         val err = stderrBuf.toString().trim().takeLast(2000)
         if (err.isNotEmpty()) appendLine("  stderr:\n    ${err.replace("\n", "\n    ")}")
@@ -204,7 +310,7 @@ private class RemoteCodeLldbDapConnection(
     }
 
     override fun close() {
-        CodeLldbHarness.stopProcess(codelldbProcess)
+        stopAdapter(adapterProcess)
         serverProcess.destroy()
         serverProcess.waitFor(3, TimeUnit.SECONDS)
         if (serverProcess.isAlive) serverProcess.destroyForcibly()

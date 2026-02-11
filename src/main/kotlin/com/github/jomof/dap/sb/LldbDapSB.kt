@@ -281,10 +281,26 @@ private class LldbDapTarget(private val ctx: AsyncRequestContext) : SBTarget {
 
     override suspend fun launch(launchInfo: SBLaunchInfo): SBProcess {
         val v = (launchInfo as LldbDapLaunchInfo).pythonVarName
-        // Launch returns (SBProcess, SBError). Check error, then return PID.
+        // On macOS, ensure LLDB knows where to find debugserver for
+        // remote platform launches. Set the internal setting directly
+        // since env var LLDB_DEBUGSERVER_PATH may not reach LLDB's core.
+        val debugServerPath = System.getenv("LLDB_DEBUGSERVER_PATH")
+        if (debugServerPath != null) {
+            evalPyVoid(ctx,
+                "lldb.debugger.HandleCommand(" +
+                    "'settings set platform.plugin.darwin.debugserver-path $debugServerPath')"
+            )
+        }
+        // Launch returns (SBProcess, SBError). Check the SBError, then
+        // validate the process is valid (remote platforms can return
+        // success in the SBError but an invalid process when debugserver
+        // is unavailable).
         val output = evalPy(ctx,
             "_e = lldb.SBError(); _p = lldb.target.Launch($v, _e); " +
-                "_kdap_check(_e); _p.GetProcessID()")
+                "_kdap_check(_e); " +
+                "str(_p.GetProcessID()) if _p.IsValid() else " +
+                "exec('raise Exception(\"Process is not valid after launch. \" + " +
+                    "\"state=\" + str(_p.GetState()))')")
         val pid = output.trim().toLongOrNull()
         return LldbDapProcess(ctx, cachedPid = pid)
     }
@@ -344,6 +360,11 @@ private class LldbDapProcess(
     override suspend fun state(): ProcessState {
         val output = evalPy(ctx, "lldb.target.GetProcess().GetState()")
         return stateFromLldbInt(output.trim().toInt())
+    }
+
+    override suspend fun exitStatus(): Int {
+        val output = evalPy(ctx, "lldb.target.GetProcess().GetExitStatus()")
+        return output.trim().toInt()
     }
 
     override suspend fun resume() {

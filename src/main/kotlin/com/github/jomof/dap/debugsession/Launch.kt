@@ -69,7 +69,7 @@ suspend fun DebugSession.handleLaunch(rawJson: String, ctx: AsyncRequestContext)
     val args = LaunchRequestArguments.fromJson(argsObj)
 
     try {
-        val debugger = createDebugger(ctx)
+        val debugger = createDebugger(ctx).let { d -> sbWatcher?.let { d.watched(it) } ?: d }
 
         // common_init_session (launch.rs:21)
         commonInitSession(args.common, debugger, ctx)
@@ -90,8 +90,9 @@ suspend fun DebugSession.handleLaunch(rawJson: String, ctx: AsyncRequestContext)
         } else {
             val program = args.program
                 ?: throw SBError("The \"program\" attribute is required for launch.")
-            target = createTargetFromProgram(program, debugger)
+            target = createTargetFromProgram(program, debugger, ctx)
         }
+
 
         // send_event(EventBody::initialized) (launch.rs:50)
         ctx.sendEventToClient(InitializedEvent(seq = 0).toJson())
@@ -128,6 +129,7 @@ suspend fun DebugSession.handleLaunch(rawJson: String, ctx: AsyncRequestContext)
         sendErrorResponse(ctx, requestSeq, "launch", e.message ?: "Launch failed")
     }
 }
+
 
 // ── complete_launch (launch.rs:62) ───────────────────────────────
 
@@ -206,9 +208,17 @@ private suspend fun DebugSession.completeLaunch(
         process = target.launch(launchInfo)
     }
 
-    // Announce launched process (launch.rs:186-190)
+    // Validate the process was actually created.
     val pid = process.processId()
-    consoleMessage("Launched process $pid from '$programPath'", ctx)
+    val launchState = process.state()
+    if (!launchState.isAlive() && launchState != ProcessState.Exited) {
+        throw SBError(
+            "Process launch failed: state=$launchState, pid=$pid. " +
+                "For remote launches, ensure lldb-server is running and " +
+                "LLDB_DEBUGSERVER_PATH is set."
+        )
+    }
+    consoleMessage("Launched process $pid from '$programPath' (state=$launchState)", ctx)
 
     // Note: the continued event is sent by handleLaunch AFTER the
     // launch and configurationDone responses, matching CodeLLDB's ordering.
@@ -232,7 +242,7 @@ suspend fun DebugSession.handleAttach(rawJson: String, ctx: AsyncRequestContext)
     val args = AttachRequestArguments.fromJson(argsObj)
 
     try {
-        val debugger = createDebugger(ctx)
+        val debugger = createDebugger(ctx).let { d -> sbWatcher?.let { d.watched(it) } ?: d }
 
         // common_init_session (launch.rs:199)
         commonInitSession(args.common, debugger, ctx)
@@ -251,7 +261,7 @@ suspend fun DebugSession.handleAttach(rawJson: String, ctx: AsyncRequestContext)
             }
             args.program != null -> {
                 try {
-                    createTargetFromProgram(args.program, debugger)
+                    createTargetFromProgram(args.program, debugger, ctx)
                 } catch (_: Exception) {
                     // Assume attach-by-name
                     debugger.createTarget()
@@ -365,7 +375,7 @@ suspend fun DebugSession.handleDisconnect(rawJson: String, ctx: AsyncRequestCont
     val terminateDebuggee = argsObj?.optNullableBoolean("terminateDebuggee")
 
     try {
-        val debugger = createDebugger(ctx)
+        val debugger = createDebugger(ctx).let { d -> sbWatcher?.let { d.watched(it) } ?: d }
 
         // preTerminateCommands (launch.rs:383-385)
         preTerminateCommands?.let { commands ->
@@ -407,7 +417,7 @@ suspend fun DebugSession.handleTerminate(rawJson: String, ctx: AsyncRequestConte
     val requestSeq = obj.optInt("seq", 0)
 
     try {
-        val debugger = createDebugger(ctx)
+        val debugger = createDebugger(ctx).let { d -> sbWatcher?.let { d.watched(it) } ?: d }
 
         when (val shutdown = gracefulShutdown) {
             is Either.First<*> -> {
@@ -677,19 +687,12 @@ private suspend fun configureStdio(
 /**
  * Mirrors CodeLLDB's `create_target_from_program`.
  */
-private suspend fun createTargetFromProgram(program: String, debugger: SBDebugger): SBTarget {
-    return try {
-        debugger.createTarget(program)
-    } catch (e: SBError) {
-        // On Windows, try adding .exe extension (launch.rs:418-425)
-        if (System.getProperty("os.name", "").lowercase().contains("windows")
-            && !program.endsWith(".exe")
-        ) {
-            debugger.createTarget("$program.exe")
-        } else {
-            throw e
-        }
-    }
+private suspend fun createTargetFromProgram(
+    program: String,
+    debugger: SBDebugger,
+    ctx: AsyncRequestContext,
+): SBTarget {
+    return debugger.createTarget(program)
 }
 
 // ── init_source_map (launch.rs:633) ──────────────────────────────
@@ -741,6 +744,7 @@ private suspend fun execCommands(
             })
         }
         val response = ctx.sendRequestToBackendAndAwait(json.toString())
+        log.fine { "Launch: $label '$command' → success=${response.success}, result=${response.body["result"]}, message=${response.message}" }
         if (!response.success) {
             log.warning { "Launch: $label command failed: $command — ${response.message}" }
             throw SBError("$label command failed: ${response.message ?: command}")

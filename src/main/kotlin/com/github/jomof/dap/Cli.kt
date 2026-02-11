@@ -7,17 +7,21 @@ package com.github.jomof.dap
  * - --port N: listen on port N, accept one connection
  * - --connect N: connect to localhost:N
  * - --lldb-dap PATH: explicit path to the lldb-dap executable
+ * - --sb-log PATH: write SB API call trace to file
  */
 object Cli {
     private const val PORT = "--port"
     private const val CONNECT = "--connect"
     private const val LLDB_DAP = "--lldb-dap"
+    private const val SB_LOG = "--sb-log"
     private const val DEFAULT_HOST = "127.0.0.1"
 
     data class Config(
         val transport: Transport,
         /** Explicit path to the `lldb-dap` executable, or null for auto-discovery. */
         val lldbDapPath: String? = null,
+        /** Path to write SB API call trace, or null to disable. */
+        val sbLogPath: String? = null,
     )
 
     /**
@@ -27,6 +31,7 @@ object Cli {
         var port: Int? = null
         var connect: Int? = null
         var lldbDapPath: String? = null
+        var sbLogPath: String? = null
         var i = 0
         while (i < args.size) {
             when (args[i]) {
@@ -47,14 +52,19 @@ object Cli {
                     lldbDapPath = args[i + 1]
                     i += 2
                 }
+                SB_LOG -> {
+                    if (i + 1 >= args.size) return null
+                    sbLogPath = args[i + 1]
+                    i += 2
+                }
                 else -> i++
             }
         }
         return when {
             port != null && connect != null -> null
-            connect != null -> Config(Transport.TcpConnect(DEFAULT_HOST, connect), lldbDapPath)
-            port != null -> Config(Transport.TcpListen(port), lldbDapPath)
-            else -> Config(Transport.Stdio, lldbDapPath)
+            connect != null -> Config(Transport.TcpConnect(DEFAULT_HOST, connect), lldbDapPath, sbLogPath)
+            port != null -> Config(Transport.TcpListen(port), lldbDapPath, sbLogPath)
+            else -> Config(Transport.Stdio, lldbDapPath, sbLogPath)
         }
     }
 }

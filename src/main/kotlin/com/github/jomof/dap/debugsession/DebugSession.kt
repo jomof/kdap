@@ -1,6 +1,8 @@
 package com.github.jomof.dap.debugsession
 
+import com.github.jomof.dap.SBWatcher
 import com.github.jomof.dap.messages.Either
+import com.github.jomof.dap.sb.SBTarget
 
 /**
  * Mutable session state for a single debug session, mirroring the fields
@@ -47,4 +49,14 @@ class DebugSession {
     /** Graceful shutdown config: signal name (First) or commands (Second). */
     @Volatile
     var gracefulShutdown: Either<String, List<String>>? = null
+
+    /**
+     * Optional observer for SB API calls. When set, [com.github.jomof.dap.sb.createDebugger]
+     * wraps the returned [com.github.jomof.dap.sb.SBDebugger] with a decorator that
+     * reports every method call to this watcher.
+     *
+     * @see com.github.jomof.dap.sb.watched
+     */
+    @Volatile
+    var sbWatcher: SBWatcher? = null
 }

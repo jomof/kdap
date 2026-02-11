@@ -24,10 +24,11 @@ fun main(args: Array<String>) = mainImpl(args)
 fun mainImpl(args: Array<String>) {
     val config = Cli.parse(args)
     if (config == null) {
-        System.err.println("Usage: [--port N] | [--connect N] [--lldb-dap PATH]")
+        System.err.println("Usage: [--port N] | [--connect N] [--lldb-dap PATH] [--sb-log PATH]")
         System.err.println("  --port N         Listen on port N (use 0 for OS-assigned)")
         System.err.println("  --connect N      Connect to 127.0.0.1:N")
         System.err.println("  --lldb-dap PATH  Path to lldb-dap executable (required)")
+        System.err.println("  --sb-log PATH    Write SB API call trace to file")
         System.err.println("  (no args)        Use stdio")
         System.exit(1)
         return
@@ -50,13 +51,15 @@ fun mainImpl(args: Array<String>) {
             return
         }
 
+    val sbWatcher = config.sbLogPath?.let { FileSBWatcher(File(it)) }
+
     val lldbDap = LldbDapProcess.start(lldbDapPath)
     try {
         DapServer.runDecorator(
             transport,
             lldbDap.inputStream,
             lldbDap.outputStream,
-            KdapInterceptor(),
+            KdapInterceptor(KdapInterceptor.defaultHandlers(sbWatcher), sbWatcher),
         )
     } finally {
         lldbDap.close()

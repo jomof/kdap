@@ -45,6 +45,14 @@ object KdapHarness {
         cmd.addAll(listOf("--lldb-dap", lldbDapPath))
         val processBuilder = ProcessBuilder(cmd).redirectErrorStream(false)
         processBuilder.environment().remove("TERM")
+        // On macOS, lldb-dap needs LLDB_DEBUGSERVER_PATH to launch debug
+        // sessions on remote platforms (without it: "unable to launch a
+        // GDB server on '127.0.0.1'").
+        if (System.getProperty("os.name").lowercase().contains("mac")) {
+            LldbDapHarness.resolveDebugServer()?.let {
+                processBuilder.environment()["LLDB_DEBUGSERVER_PATH"] = it.absolutePath
+            }
+        }
         return processBuilder.start()
     }
 

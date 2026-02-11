@@ -63,4 +63,28 @@ object LldbDapHarness {
         val lldbDap = LldbDapProcess.startTcp(path, port)
         return lldbDap to port
     }
+
+    /**
+     * Finds lldb-server next to lldb-dap in the LLVM install.
+     * Returns null if lldb-dap is not found or lldb-server is missing.
+     */
+    fun resolveLldbServer(): File? {
+        val lldbDap = resolveLldbDapPath() ?: return null
+        val binDir = lldbDap.parentFile ?: return null
+        val server = File(binDir, "lldb-server")
+        return if (server.isFile && server.canExecute()) server else null
+    }
+
+    /**
+     * On macOS, lldb-server from Homebrew LLVM cannot find the system
+     * `debugserver` binary. This resolves the path to Apple's debugserver
+     * from Command Line Tools or Xcode, for use as LLDB_DEBUGSERVER_PATH.
+     */
+    fun resolveDebugServer(): File? {
+        val candidates = listOf(
+            "/Library/Developer/CommandLineTools/Library/PrivateFrameworks/LLDB.framework/Resources/debugserver",
+            "/Applications/Xcode.app/Contents/SharedFrameworks/LLDB.framework/Resources/debugserver",
+        )
+        return candidates.map { File(it) }.firstOrNull { it.isFile && it.canExecute() }
+    }
 }

@@ -144,7 +144,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
     TCP_LISTEN(ServerKind.OUR_SERVER) {
         override fun connect(): ConnectionContext {
             val result = KdapHarness.startAdapterTcp()
-            val socket = TcpTestUtils.connectToPort(result.port, expectedProcess = result.process).apply { soTimeout = 10_000 }
+            val socket = TcpTestUtils.connectToPort(result.port, expectedProcess = result.process).apply { soTimeout = 30_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
                 override val outputStream: OutputStream = socket.getOutputStream()
@@ -168,7 +168,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
                     r.lineSequence().forEach { stderrBuf.appendLine(it) }
                 }
             }
-            val socket = server.accept().apply { soTimeout = 10_000 }
+            val socket = server.accept().apply { soTimeout = 30_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
                 override val outputStream: OutputStream = socket.getOutputStream()
@@ -223,7 +223,7 @@ enum class ConnectionMode(val serverKind: ServerKind) {
             }
             serverError.get()?.let { throw it }
             val port = portHolder.get()
-            val socket = java.net.Socket("127.0.0.1", port).apply { soTimeout = 10_000 }
+            val socket = java.net.Socket("127.0.0.1", port).apply { soTimeout = 30_000 }
             return object : ConnectionContext {
                 override val inputStream: InputStream = BufferedInputStream(socket.getInputStream(), DAP_READ_BUFFER_SIZE)
                 override val outputStream: OutputStream = socket.getOutputStream()

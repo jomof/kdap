@@ -800,7 +800,7 @@ sealed class DapRequest : DapMessage() {
  * and [terminal] for `runInTerminal` support.
  */
 data class LaunchRequest(
-    override val seq: Int,
+    override val seq: Int = 0,
     val arguments: LaunchRequestArguments = LaunchRequestArguments(),
 ) : DapRequest() {
     override val command get() = "launch"
@@ -832,12 +832,16 @@ data class EvaluateRequest(
 // ── Standard DAP commands (forwarded, minimal fields) ────────────────
 
 data class InitializeRequest(
-    override val seq: Int,
+    override val seq: Int = 0,
     /** Whether the client supports the `runInTerminal` reverse request. */
     val supportsRunInTerminalRequest: Boolean = false,
 ) : DapRequest() {
     override val command get() = "initialize"
-    override fun toJson(): String = buildRequestJson()
+    override fun toJson(): String = buildRequestJson(JSONObject().apply {
+        put("adapterID", "lldb")
+        put("pathFormat", "path")
+        if (supportsRunInTerminalRequest) put("supportsRunInTerminalRequest", true)
+    })
 }
 
 data class AttachRequest(override val seq: Int) : DapRequest() {
@@ -885,7 +889,7 @@ data class SetInstructionBreakpointsRequest(override val seq: Int) : DapRequest(
     override fun toJson(): String = buildRequestJson()
 }
 
-data class ConfigurationDoneRequest(override val seq: Int) : DapRequest() {
+data class ConfigurationDoneRequest(override val seq: Int = 0) : DapRequest() {
     override val command get() = "configurationDone"
     override fun toJson(): String = buildRequestJson()
 }

@@ -94,11 +94,18 @@ suspend fun DebugSession.handleLaunch(rawJson: String, ctx: AsyncRequestContext)
         }
 
 
+        // Pre-register the configurationDone intercept BEFORE sending
+        // initialized. The initialized event triggers the client to send
+        // configurationDone — without pre-registration, on slow machines
+        // the request might arrive before the intercept is set up and
+        // leak through to lldb-dap (which rejects it).
+        val configDoneToken = ctx.registerIntercept("configurationDone")
+
         // send_event(EventBody::initialized) (launch.rs:50)
         ctx.sendEventToClient(InitializedEvent(seq = 0).toJson())
 
         // Wait for configurationDone (launch.rs:52-55)
-        val configDoneRawJson = ctx.interceptClientRequest("configurationDone")
+        val configDoneRawJson = ctx.awaitIntercept(configDoneToken)
         val configDoneSeq = JSONObject(configDoneRawJson).optInt("seq", 0)
 
         // create_terminal (launch.rs:56)
@@ -270,11 +277,15 @@ suspend fun DebugSession.handleAttach(rawJson: String, ctx: AsyncRequestContext)
             else -> debugger.createTarget()
         }
 
+        // Pre-register the configurationDone intercept BEFORE sending
+        // initialized (same race-prevention as handleLaunch).
+        val configDoneToken = ctx.registerIntercept("configurationDone")
+
         // send_event(EventBody::initialized) (launch.rs:234)
         ctx.sendEventToClient(InitializedEvent(seq = 0).toJson())
 
         // Wait for configurationDone (launch.rs:236-239)
-        val configDoneRawJson = ctx.interceptClientRequest("configurationDone")
+        val configDoneRawJson = ctx.awaitIntercept(configDoneToken)
         val configDoneSeq = JSONObject(configDoneRawJson).optInt("seq", 0)
 
         // Activate the event gate so that backend events are buffered

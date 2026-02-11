@@ -160,6 +160,23 @@ class DapSession(
         suspend fun interceptClientRequest(command: String): String
 
         /**
+         * Non-suspending: registers an interception for the next client
+         * request whose `command` matches [command]. Returns a token
+         * that can be passed to [awaitIntercept] to retrieve the request.
+         *
+         * Use when the intercept must be registered before an event is
+         * sent that will trigger the client to send the request (e.g.,
+         * register for `configurationDone` before sending `initialized`).
+         */
+        fun registerIntercept(command: String): Any
+
+        /**
+         * Suspends until the intercept registered by [registerIntercept]
+         * completes. Returns the raw JSON of the intercepted request.
+         */
+        suspend fun awaitIntercept(token: Any): String
+
+        /**
          * Activates the event gate. While active, backend messages that
          * have passed through the interceptor chain are buffered instead
          * of being sent to the client. This prevents backend-originated
@@ -341,6 +358,17 @@ class DapSession(
                 val deferred = CompletableDeferred<String>()
                 pendingClientInterceptions[command] = deferred
                 return deferred.await()
+            }
+
+            override fun registerIntercept(command: String): Any {
+                val deferred = CompletableDeferred<String>()
+                pendingClientInterceptions[command] = deferred
+                return deferred
+            }
+
+            @Suppress("UNCHECKED_CAST")
+            override suspend fun awaitIntercept(token: Any): String {
+                return (token as CompletableDeferred<String>).await()
             }
 
             override fun activateEventGate() {

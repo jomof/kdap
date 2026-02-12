@@ -1,0 +1,17 @@
+→lldb-dap {"arguments":{"pathFormat":"path","adapterID":"lldb"},"type":"request","seq":1,"command":"initialize"}
+←lldb-dap {"success":true,"type":"response","body":{"supportsDisassembleRequest":true,"$__lldb_version":"lldb version 21.1.8","supportsConfigurationDoneRequest":true,"supportsConditionalBreakpoints":true,"supportsModulesRequest":true,"supportsCancelRequest":true,"supportsHitConditionalBreakpoints":true,"supportsLogPoints":true,"supportsReadMemoryRequest":true,"supportsExceptionFilterOptions":true,"exceptionBreakpointFilters":[{"filter":"cpp_catch","supportsCondition":true,"description":"C++ Catch","label":"C++ Catch"},{"filter":"cpp_throw","supportsCondition":true,"description":"C++ Throw","label":"C++ Throw"},{"filter":"objc_catch","supportsCondition":true,"description":"Objective-C Catch","label":"Objective-C Catch"},{"filter":"objc_throw","supportsCondition":true,"description":"Objective-C Throw","label":"Objective-C Throw"}],"supportsExceptionInfoRequest":true,"completionTriggerCharacters":["."," ","\t"],"supportsValueFormattingOptions":true,"supportsCompletionsRequest":true,"supportTerminateDebuggee":true,"supportsSteppingGranularity":true,"supportsDelayedStackTraceLoading":true,"supportsDataBreakpoints":true,"supportsEvaluateForHovers":true,"supportsBreakpointLocationsRequest":true,"supportsFunctionBreakpoints":true,"supportsInstructionBreakpoints":true,"supportsSetVariable":true,"supportsWriteMemoryRequest":true},"seq":0,"request_seq":1,"command":"initialize"}
+→lldb-dap {"arguments":{"name":"remote-test","initCommands":["platform select remote-macosx","platform connect connect://127.0.0.1:49398"],"program":"/Users/jomofisher/projects/kdap/debuggee/build/debuggee","terminal":"console"},"type":"request","seq":2,"command":"launch"}
+SBDebugger.createTarget(program=/Users/jomofisher/projects/kdap/debuggee/build/debuggee) -> SBTarget
+SBTarget.launchInfo() -> SBLaunchInfo
+SBLaunchInfo.setEnvironment(append=false) -> Unit
+SBTarget.setLaunchInfo(info=SBLaunchInfo) -> Unit
+SBTarget.executable() -> SBFileSpec
+SBFileSpec.isValid() -> true
+SBFileSpec.path() -> /Users/jomofisher/projects/kdap/debuggee/build/debuggee
+SBTarget.launch(launchInfo=SBLaunchInfo) -> SBProcess
+SBProcess.processId() -> 61391
+SBProcess.state() -> Running
+←lldb-dap No testcase was specified.
+←lldb-dap Process 61391 exited with status = 255 (0x000000ff) 
+←lldb-dap exited(255)
+←lldb-dap terminated

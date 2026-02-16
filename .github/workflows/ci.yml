@@ -133,7 +133,7 @@ jobs:
 
       - name: Upload test report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: test-report-${{ matrix.platform_id }}
           path: build/reports/tests/test/
